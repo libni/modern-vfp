@@ -1,0 +1,52 @@
+{
+  "form": {
+    "name": "frmClientes",
+    "caption": "Catálogo Maestro de Clientes - FoxNext RAD",
+    "width": 760,
+    "height": 520,
+    "dataEnvironment": {
+      "cursors": [
+        {
+          "alias": "clientes",
+          "schema": "id I, nombre C(45), email C(60), saldo Y, activo L"
+        }
+      ]
+    },
+    "controls": [
+      {
+        "type": "TextBox",
+        "name": "txtNombre",
+        "caption": "Nombre Cliente:",
+        "controlSource": "clientes.nombre"
+      },
+      {
+        "type": "TextBox",
+        "name": "txtEmail",
+        "caption": "Correo Electrónico:",
+        "controlSource": "clientes.email"
+      },
+      {
+        "type": "CheckBox",
+        "name": "chkActivo",
+        "caption": "Cuenta Activa",
+        "controlSource": "clientes.activo"
+      },
+      {
+        "type": "Grid",
+        "name": "grdClientes",
+        "caption": "Listado de Clientes",
+        "recordSource": "clientes"
+      },
+      {
+        "type": "Button",
+        "name": "btnGuardar",
+        "caption": "Guardar Cambios (TABLEUPDATE)",
+        "onClick": "TABLEUPDATE(.T., .T., 'clientes')"
+      }
+    ],
+    "methods": {
+      "Load": "SELECT clientes\nCURSORSETPROP('Buffering', 5, 'clientes')\nINSERT INTO clientes VALUES (1, 'Ada Lovelace', 'ada@analytical.org', 12500.00, .T.)\nINSERT INTO clientes VALUES (2, 'Alan Turing', 'alan@bletchley.uk', 8900.50, .T.)\nINSERT INTO clientes VALUES (3, 'Grace Hopper', 'grace@cobol.us', 19400.75, .T.)\nTABLEUPDATE(.T., .T., 'clientes')",
+      "Init": "SELECT clientes\nGO TOP"
+    }
+  }
+}

@@ -425,6 +425,35 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
     def fn_sqldisconnect(handle: int = 0) -> int:
         return wam.sql_disconnect(handle)
 
+    def fn_txnlevel() -> int:
+        return wam.txn_level()
+
+    def fn_cursortojson(alias: Any = None) -> str:
+        return wam.cursor_to_json(alias)
+
+    def fn_jsontocursor(json_str: Any, cursor_name: str = "jsonresult") -> int:
+        return wam.json_to_cursor(str(json_str), cursor_name)
+
+    def fn_httpget(url: str) -> str:
+        import urllib.request
+
+        req = urllib.request.Request(str(url), headers={"User-Agent": "FoxNext/0.4.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    def fn_httppost(url: str, body: Any = "", content_type: str = "application/json") -> str:
+        import urllib.request
+
+        data_bytes = str(body).encode("utf-8")
+        req = urllib.request.Request(
+            str(url),
+            data=data_bytes,
+            headers={"User-Agent": "FoxNext/0.4.0", "Content-Type": content_type},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
     # --- Funciones de Archivos y JSON ---
     def fn_file(filepath: Any) -> bool:
         return Path(str(filepath)).is_file()
@@ -527,6 +556,11 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         "sqlconnect": fn_sqlconnect,
         "sqlstringconnect": fn_sqlconnect,
         "sqldisconnect": fn_sqldisconnect,
+        "txnlevel": fn_txnlevel,
+        "cursortojson": fn_cursortojson,
+        "jsontocursor": fn_jsontocursor,
+        "httpget": fn_httpget,
+        "httppost": fn_httppost,
         "file": fn_file,
         "filetostr": fn_filetostr,
         "strtofile": fn_strtofile,

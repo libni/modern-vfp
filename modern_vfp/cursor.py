@@ -7,6 +7,7 @@ buffering transaccional (TABLEUPDATE / TABLEREVERT) y puente SQL relacional en m
 from __future__ import annotations
 import copy
 import datetime
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -539,6 +540,104 @@ class WorkAreaManager:
         self.set_deleted: bool = False  # SET DELETED OFF por defecto en VFP
         self._sql_connections: Dict[int, sqlite3.Connection] = {}
         self._next_sql_handle: int = 1
+        self._txn_stack: List[Dict[int, Tuple[List[Dict[str, Any]], List[bool], int, bool, bool]]] = []
+
+    def begin_transaction(self) -> int:
+        snap: Dict[int, Tuple[List[Dict[str, Any]], List[bool], int, bool, bool]] = {}
+        for area, cur in self.work_areas.items():
+            snap[area] = (
+                copy.deepcopy(cur.records),
+                list(cur.deleted_flags),
+                cur._recno,
+                cur.bof,
+                cur.eof,
+            )
+        self._txn_stack.append(snap)
+        return len(self._txn_stack)
+
+    def end_transaction(self) -> int:
+        if not self._txn_stack:
+            raise RuntimeError("END TRANSACTION invocado sin un BEGIN TRANSACTION activo.")
+        self._txn_stack.pop()
+        return len(self._txn_stack)
+
+    def rollback(self) -> int:
+        if not self._txn_stack:
+            raise RuntimeError("ROLLBACK invocado sin un BEGIN TRANSACTION activo.")
+        snap = self._txn_stack.pop()
+        for area, state in snap.items():
+            if area in self.work_areas:
+                cur = self.work_areas[area]
+                cur.records = state[0]
+                cur.deleted_flags = state[1]
+                cur._recno = state[2]
+                cur.bof = state[3]
+                cur.eof = state[4]
+        return len(self._txn_stack)
+
+    def txn_level(self) -> int:
+        return len(self._txn_stack)
+
+    def cursor_to_json(self, alias_or_area: Any = None) -> str:
+        cur = self.get_cursor(alias_or_area) if alias_or_area is not None else self.current_cursor()
+        if cur is None:
+            raise RuntimeError("CURSORTOJSON requiere un cursor abierto.")
+        vis = cur.visible_recnos(self.set_deleted)
+        rows = []
+        for r in vis:
+            raw_row = cur.records[r - 1]
+            clean = {}
+            for f in cur.fields:
+                v = raw_row.get(f.name)
+                if isinstance(v, (datetime.date, datetime.datetime)):
+                    clean[f.name] = v.isoformat()
+                else:
+                    clean[f.name] = v
+            rows.append(clean)
+        return json.dumps(rows, ensure_ascii=False)
+
+    def json_to_cursor(self, json_str: str, cursor_name: str = "jsonresult") -> int:
+        data = json.loads(str(json_str))
+        if isinstance(data, dict):
+            for v in data.values():
+                if isinstance(v, list):
+                    data = v
+                    break
+            else:
+                data = [data]
+        if not isinstance(data, list):
+            raise ValueError("JSONTOCURSOR requiere un arreglo JSON de objetos.")
+
+        col_order: List[str] = []
+        sample_vals: Dict[str, Any] = {}
+        for item in data:
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    kl = str(k).lower()
+                    if kl not in col_order:
+                        col_order.append(kl)
+                    if kl not in sample_vals and v is not None:
+                        sample_vals[kl] = v
+
+        fields: List[FieldDef] = []
+        for col in col_order:
+            sv = sample_vals.get(col)
+            if isinstance(sv, bool):
+                fields.append(FieldDef(col, "L", 1, 0))
+            elif isinstance(sv, int):
+                fields.append(FieldDef(col, "I", 10, 0))
+            elif isinstance(sv, float):
+                fields.append(FieldDef(col, "N", 14, 2))
+            else:
+                fields.append(FieldDef(col, "V", 120, 0))
+
+        cur = Cursor((cursor_name or "jsonresult").lower(), fields)
+        for item in data:
+            if isinstance(item, dict):
+                cur.append_dict({str(k).lower(): v for k, v in item.items()})
+        cur.go_top(self.set_deleted)
+        self.open_cursor_in_current_or_new(cur, in_free_area=True)
+        return cur.reccount()
 
     def sql_connect(self, conn_str: str = ":memory:") -> int:
         """

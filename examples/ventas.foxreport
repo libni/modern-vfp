@@ -1,0 +1,71 @@
+{
+  "report": {
+    "name": "rptRankingVentas",
+    "title": "Reporte Ejecutivo de Facturación por Cliente",
+    "subtitle": "Generado por el Motor de Reportes por Bandas de FoxNext (64-bit)",
+    "alias": "curRanking",
+    "groupBy": {
+      "expr": "ciudad",
+      "label": "Ciudad",
+      "subtotalExpr": "total_ventas",
+      "footerLabel": "Subtotal Plaza"
+    },
+    "columns": [
+      {
+        "name": "id",
+        "label": "ID",
+        "expr": "id",
+        "width": 6,
+        "align": "right"
+      },
+      {
+        "name": "nombre",
+        "label": "Cliente",
+        "expr": "nombre",
+        "width": 22,
+        "align": "left"
+      },
+      {
+        "name": "ciudad",
+        "label": "Ciudad",
+        "expr": "ciudad",
+        "width": 16,
+        "align": "left"
+      },
+      {
+        "name": "facturas",
+        "label": "Facturas",
+        "expr": "num_facturas",
+        "width": 10,
+        "align": "right"
+      },
+      {
+        "name": "total",
+        "label": "Total Facturado",
+        "expr": "total_ventas",
+        "width": 16,
+        "align": "right",
+        "format": "$999,999.99"
+      }
+    ],
+    "summary": [
+      {
+        "label": "Total Clientes Activos",
+        "expr": "id",
+        "op": "COUNT"
+      },
+      {
+        "label": "Facturación Global Acumulada",
+        "expr": "total_ventas",
+        "op": "SUM",
+        "format": "$999,999.99"
+      },
+      {
+        "label": "Ticket Promedio por Cliente",
+        "expr": "total_ventas",
+        "op": "AVG",
+        "format": "$999,999.99"
+      }
+    ]
+  }
+}

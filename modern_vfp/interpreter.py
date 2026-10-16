@@ -11,8 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .cursor import Cursor, FieldDef, WorkAreaManager, parse_schema_string
-from .dbf import export_csv, export_json, read_dbf, write_dbf
+from .dbf import export_csv, export_json, import_csv, import_json, read_dbf, write_dbf
 from .functions import build_vfp_functions
+from .migrator import migrate_scx_to_foxform
 
 
 class _LoopExit(Exception):
@@ -156,6 +157,7 @@ class FoxInterpreter:
         self.functions = build_vfp_functions(self.wam)
         self.functions["createobject"] = self.create_object
         self.functions["evaluate"] = self.eval_expr
+        self.functions["sqlexec"] = self.sql_exec
 
         self.global_vars: Dict[str, Any] = {}
         self.call_stack: List[Dict[str, Any]] = []
@@ -168,6 +170,9 @@ class FoxInterpreter:
 
         self.output_buffer: List[str] = []
         self._output_cb = output_callback
+
+    def sql_exec(self, handle: int, sql_stmt: str, cursor_name: str = "sqlresult") -> int:
+        return self.wam.sql_exec(handle, sql_stmt, cursor_name, self.current_vars())
 
     def emit(self, text: str, newline: bool = True) -> None:
         if self._output_cb:
@@ -1172,9 +1177,158 @@ class FoxInterpreter:
                 write_dbf(path, fdicts, vis_rows, vis_dels)
             return
 
+        # 16b. APPEND FROM <archivo> [TYPE CSV|JSON|DBF]
+        m_app_from = re.match(
+            r"^APPEND\s+FROM\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_app_from:
+            cur = self._require_cursor("APPEND FROM")
+            raw_src = m_app_from.group(1).strip("\"'")
+            fmt = (m_app_from.group(2) or "").upper()
+            path = Path(raw_src)
+            if not fmt:
+                ext = path.suffix.lower()
+                if ext == ".csv":
+                    fmt = "CSV"
+                elif ext == ".json":
+                    fmt = "JSON"
+                else:
+                    fmt = "DBF"
+                    if not ext:
+                        path = path.with_suffix(".dbf")
+            if fmt == "CSV":
+                rows = import_csv(path)
+            elif fmt == "JSON":
+                rows = import_json(path)
+            else:
+                _, rows, _ = read_dbf(path)
+            for r in rows:
+                cur.append_dict(r)
+            return
+
+        # 16c. SQL Nativo: UPDATE <alias> SET col1 = expr1 [, col2 = expr2] [WHERE cond]
+        m_upd = re.match(
+            r"^UPDATE\s+([A-Za-z_][A-Za-z0-9_]*)\s+SET\s+(.+?)(?:\s+WHERE\s+(.+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_upd:
+            alias = m_upd.group(1).lower()
+            set_part = m_upd.group(2).strip()
+            where_part = m_upd.group(3).strip() if m_upd.group(3) else None
+            cur = self.wam.get_cursor(alias)
+            if cur is None:
+                raise RuntimeError(f"El cursor '{alias}' no existe para UPDATE.")
+            assignments: List[Tuple[str, str]] = []
+            for item in self._split_top_level(set_part, ","):
+                if "=" not in item:
+                    raise SyntaxError(f"Asignación inválida en UPDATE SET: '{item}'")
+                k, v = item.split("=", 1)
+                assignments.append((k.strip().split(".")[-1], v.strip()))
+
+            saved_area = self.wam.current_area
+            self.wam.select_area(cur.alias)
+            try:
+                for r in list(cur.visible_recnos(self.wam.set_deleted)):
+                    cur.goto(r)
+                    if where_part is None or bool(self.eval_expr(where_part)):
+                        for col_name, val_expr in assignments:
+                            cur.set_field(col_name, self.eval_expr(val_expr))
+            finally:
+                self.wam.current_area = saved_area
+            return
+
+        # 16d. SQL Nativo: DELETE FROM <alias> [WHERE cond]
+        m_del_sql = re.match(
+            r"^DELETE\s+FROM\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+WHERE\s+(.+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_del_sql:
+            alias = m_del_sql.group(1).lower()
+            where_part = m_del_sql.group(2).strip() if m_del_sql.group(2) else None
+            cur = self.wam.get_cursor(alias)
+            if cur is None:
+                raise RuntimeError(f"El cursor '{alias}' no existe para DELETE FROM.")
+            saved_area = self.wam.current_area
+            self.wam.select_area(cur.alias)
+            try:
+                for r in list(cur.visible_recnos(self.wam.set_deleted)):
+                    cur.goto(r)
+                    if where_part is None or bool(self.eval_expr(where_part)):
+                        cur.delete_current()
+                cur.go_top(self.wam.set_deleted)
+            finally:
+                self.wam.current_area = saved_area
+            return
+
+        # 16e. DO FORM <archivo.foxform> [TO FILE <salida.html>]
+        m_do_form = re.match(
+            r"^DO\s+FORM\s+([^\s]+)(?:\s+TO\s+FILE\s+([^\s]+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_do_form:
+            from .foxform import FoxForm
+
+            raw_form = m_do_form.group(1).strip("\"'")
+            out_file = m_do_form.group(2).strip("\"'") if m_do_form.group(2) else None
+            fpath = Path(raw_form)
+            if not fpath.suffix:
+                fpath = fpath.with_suffix(".foxform")
+            form = FoxForm.from_file(fpath, interpreter=self)
+            form.initialize()
+            self.set_var(form.name, form, scope="public")
+            if out_file:
+                form.export_html(out_file)
+            else:
+                self.emit(form.render_tui())
+            return
+
+        # 16f. REPORT FORM <archivo.foxreport> [FOR <cond>] [TO FILE <salida.html|.txt>]
+        m_rep_form = re.match(
+            r"^REPORT\s+FORM\s+([^\s]+)(?:\s+FOR\s+(.+?))?(?:\s+TO\s+FILE\s+([^\s]+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_rep_form:
+            from .foxreport import FoxReport
+
+            raw_rep = m_rep_form.group(1).strip("\"'")
+            for_expr = m_rep_form.group(2).strip() if m_rep_form.group(2) else None
+            out_file = m_rep_form.group(3).strip("\"'") if m_rep_form.group(3) else None
+            rpath = Path(raw_rep)
+            if not rpath.suffix:
+                rpath = rpath.with_suffix(".foxreport")
+            report = FoxReport.from_file(rpath, interpreter=self)
+            if out_file:
+                out_p = Path(out_file)
+                if out_p.suffix.lower() in (".html", ".htm"):
+                    out_p.write_text(report.render_html(for_expr), encoding="utf-8")
+                else:
+                    out_p.write_text(report.render_text(for_expr), encoding="utf-8")
+            else:
+                self.emit(report.render_text(for_expr))
+            return
+
+        # 16g. MIGRATE SCX <archivo.scx> TO <salida.foxform>
+        m_mig = re.match(
+            r"^MIGRATE\s+SCX\s+([^\s]+)\s+TO\s+([^\s]+)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_mig:
+            scx_in = m_mig.group(1).strip("\"'")
+            ff_out = m_mig.group(2).strip("\"'")
+            migrate_scx_to_foxform(scx_in, ff_out)
+            self.emit(f"[vfp2modern] Migrado '{scx_in}' -> '{ff_out}'")
+            return
+
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]
-        m_do = re.match(r"^DO\s+([A-Za-z0-9_./\\-]+)(?:\s+WITH\s+(.*))?$", line, flags=re.IGNORECASE)
-        if m_do and not re.match(r"^DO\s+(?:WHILE|CASE)\b", line, flags=re.IGNORECASE):
+        m_do = re.match(r'^DO\s+([^\s]+)(?:\s+WITH\s+(.*))?$', line, flags=re.IGNORECASE)
+        if m_do and not re.match(r"^DO\s+(?:WHILE|CASE|FORM)\b", line, flags=re.IGNORECASE):
             target = m_do.group(1).strip("\"'")
             args: List[Any] = []
             if m_do.group(2):
@@ -1201,8 +1355,9 @@ class FoxInterpreter:
             self.set_var(lhs, rhs_val)
             return
 
-        # 19. Evaluación directa de llamada a función o método (ej. `TABLEUPDATE(.T.)` o `loObj.Saludar()`)
-        self.eval_expr(line)
+        # 19. Evaluación directa de llamada a función o método (incluyendo prefijo clásico VFP `=FUNC()`)
+        expr_stmt = line[1:].strip() if line.startswith("=") else line
+        self.eval_expr(expr_stmt)
 
     def _exec_replace(self, body: str) -> None:
         # Extraer cláusula IN <alias>

@@ -419,6 +419,12 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         cur = _resolve_cursor(alias)
         return cur.table_revert() if cur else False
 
+    def fn_sqlconnect(conn_str: str = ":memory:") -> int:
+        return wam.sql_connect(conn_str)
+
+    def fn_sqldisconnect(handle: int = 0) -> int:
+        return wam.sql_disconnect(handle)
+
     # --- Funciones de Archivos y JSON ---
     def fn_file(filepath: Any) -> bool:
         return Path(str(filepath)).is_file()
@@ -518,6 +524,9 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         "cursorgetprop": fn_cursorgetprop,
         "tableupdate": fn_tableupdate,
         "tablerevert": fn_tablerevert,
+        "sqlconnect": fn_sqlconnect,
+        "sqlstringconnect": fn_sqlconnect,
+        "sqldisconnect": fn_sqldisconnect,
         "file": fn_file,
         "filetostr": fn_filetostr,
         "strtofile": fn_strtofile,

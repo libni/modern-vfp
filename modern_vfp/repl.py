@@ -10,7 +10,10 @@ from typing import List, Optional
 
 from . import __version__
 from .foxform import FoxForm
+from .foxreport import FoxReport
 from .interpreter import FoxInterpreter
+from .migrator import migrate_scx_to_foxform
+from .studio import start_studio_server
 
 
 BLOCK_OPENERS = ("IF ", "DO WHILE ", "DO CASE", "FOR ", "SCAN", "TRY", "PROCEDURE ", "FUNCTION ", "DEFINE CLASS ")
@@ -96,9 +99,12 @@ def _print_help() -> None:
 Comandos Principales en FoxNext Command Window:
 -----------------------------------------------
   CREATE CURSOR <alias> (id I, nombre C(40), saldo Y, activo L, fecha D)
-  APPEND BLANK | INSERT INTO <alias> VALUES (...)
+  APPEND BLANK | APPEND FROM <archivo.csv|.json|.dbf> | INSERT INTO <alias> VALUES (...)
   REPLACE <campo> WITH <valor> [ALL] [FOR <condicion>]
   SELECT * FROM <alias> WHERE <cond> INTO CURSOR <nuevo_alias>
+  UPDATE <alias> SET <campo> = <expr> WHERE <cond>
+  DELETE FROM <alias> WHERE <cond>
+  SQLCONNECT(<db>) | SQLEXEC(<h>, <sql>, <cursor>) | SQLDISCONNECT(<h>)
   BROWSE | LIST | DISPLAY STRUCTURE
   GO TOP | GO BOTTOM | GOTO <n> | SKIP [n]
   LOCATE FOR <cond> | CONTINUE
@@ -106,7 +112,9 @@ Comandos Principales en FoxNext Command Window:
   DELETE [ALL] [FOR <cond>] | RECALL | PACK | ZAP | SET DELETED ON/OFF
   COPY TO <archivo.dbf | .csv | .json> [TYPE DBF|CSV|JSON]
   USE <archivo.dbf> [IN 0] [ALIAS <alias>]
-  DO <archivo.prg>
+  DO <archivo.prg> | DO FORM <archivo.foxform>
+  REPORT FORM <archivo.foxreport> [FOR <cond>] [TO FILE <salida.html|.txt>]
+  MIGRATE SCX <archivo.scx> TO <salida.foxform>
   STATUS | CLEAR | QUIT
 """
     )
@@ -140,6 +148,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         run_repl(interp)
         return 0
 
+    if args[0] == "--studio":
+        port = int(args[1]) if len(args) > 1 and args[1].isdigit() else 8765
+        start_studio_server(interp, port=port)
+        return 0
+
+    if args[0] == "--migrate" and len(args) >= 3:
+        migrate_scx_to_foxform(args[1], args[2])
+        print(f"[vfp2modern] Migrado exitosamente: {args[1]} -> {args[2]}")
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)
@@ -149,6 +167,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         form = FoxForm.from_file(target_path, interpreter=interp)
         form.initialize()
         print(form.render_tui())
+        return 0
+
+    if target_path.suffix.lower() == ".foxreport":
+        report = FoxReport.from_file(target_path, interpreter=interp)
+        print(report.render_text())
         return 0
 
     code = target_path.read_text(encoding="utf-8")

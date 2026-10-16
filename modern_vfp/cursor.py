@@ -537,6 +537,98 @@ class WorkAreaManager:
         self.alias_to_area: Dict[str, int] = {}
         self.current_area: int = 1
         self.set_deleted: bool = False  # SET DELETED OFF por defecto en VFP
+        self._sql_connections: Dict[int, sqlite3.Connection] = {}
+        self._next_sql_handle: int = 1
+
+    def sql_connect(self, conn_str: str = ":memory:") -> int:
+        """
+        Abre una conexión SQL Pass-Through (SQLCONNECT / SQLSTRINGCONNECT) y devuelve un handle entero (> 0).
+        Soporta rutas a bases SQLite o cadenas estilo 'Driver=SQLite;Database=archivo.db'.
+        """
+        raw = str(conn_str or ":memory:").strip()
+        db_target = ":memory:"
+        if ";" in raw or "=" in raw:
+            for part in raw.split(";"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    if k.strip().lower() in ("database", "dbq", "datasource", "data source"):
+                        db_target = v.strip()
+        elif raw:
+            db_target = raw
+
+        try:
+            conn = sqlite3.connect(db_target)
+            conn.row_factory = sqlite3.Row
+            handle = self._next_sql_handle
+            self._next_sql_handle += 1
+            self._sql_connections[handle] = conn
+            return handle
+        except Exception:
+            return -1
+
+    def sql_disconnect(self, handle: int) -> int:
+        h = int(handle)
+        if h == 0:
+            for c in self._sql_connections.values():
+                c.close()
+            self._sql_connections.clear()
+            return 1
+        conn = self._sql_connections.pop(h, None)
+        if conn is None:
+            return -1
+        conn.close()
+        return 1
+
+    def sql_exec(self, handle: int, sql_stmt: str, cursor_name: str = "sqlresult", variables: Optional[Dict[str, Any]] = None) -> int:
+        """
+        Ejecuta una sentencia SQL en el servidor conectado (SQLEXEC).
+        Si la consulta devuelve filas (SELECT), las carga automáticamente en el cursor `cursor_name`.
+        Devuelve el número de cursores/filas afectados (>= 1 en éxito, -1 en error).
+        """
+        conn = self._sql_connections.get(int(handle))
+        if conn is None:
+            return -1
+        try:
+            params: Dict[str, Any] = {}
+            if variables:
+                for k, v in variables.items():
+                    if isinstance(v, bool):
+                        params[k] = 1 if v else 0
+                    elif isinstance(v, (datetime.date, datetime.datetime)):
+                        params[k] = v.isoformat()
+                    elif isinstance(v, (int, float, str)) or v is None:
+                        params[k] = v
+
+            # Soportar parámetros estilo VFP `?variable` o `:variable`
+            processed = re.sub(
+                r"\?([A-Za-z_][A-Za-z0-9_]*)",
+                lambda m: f":{m.group(1).lower()}",
+                sql_stmt,
+            )
+            cur_sql = conn.execute(processed, params)
+            if cur_sql.description:
+                rows = cur_sql.fetchall()
+                col_names = [d[0].lower() for d in cur_sql.description]
+                fields: List[FieldDef] = []
+                for idx, col in enumerate(col_names):
+                    sample = next((r[idx] for r in rows if r[idx] is not None), None)
+                    if isinstance(sample, int):
+                        fields.append(FieldDef(col, "I", 10, 0))
+                    elif isinstance(sample, float):
+                        fields.append(FieldDef(col, "N", 14, 2))
+                    else:
+                        fields.append(FieldDef(col, "V", 100, 0))
+                res_cur = Cursor((cursor_name or "sqlresult").lower(), fields)
+                for r in rows:
+                    res_cur.append_dict({col_names[i]: r[i] for i in range(len(col_names))})
+                res_cur.go_top(self.set_deleted)
+                self.open_cursor_in_current_or_new(res_cur, in_free_area=True)
+                return 1
+            else:
+                conn.commit()
+                return max(1, cur_sql.rowcount if cur_sql.rowcount >= 0 else 1)
+        except Exception:
+            return -1
 
     def current_cursor(self) -> Optional[Cursor]:
         return self.work_areas.get(self.current_area)

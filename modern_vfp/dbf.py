@@ -1,6 +1,7 @@
 """
 Módulo de compatibilidad DBF / CSV / JSON para FoxNext (Modern VFP).
-Soporta lectura y escritura nativa de archivos .dbf (dBASE III+ / VFP) con codificación UTF-8 / CP1252.
+Soporta lectura y escritura nativa de archivos .dbf (dBASE III+ / VFP) con codificación UTF-8 / CP1252,
+así como importación y exportación CSV y JSON para COPY TO y APPEND FROM.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ def write_dbf(filepath: str | Path, fields: List[Dict[str, Any]], rows: List[Dic
     num_records = len(rows)
     num_fields = len(fields)
 
-    # Preparar descriptores de campos
     field_specs = []
     record_len = 1  # 1 byte para el indicador de borrado (' ' o '*')
     for f in fields:
@@ -63,7 +63,6 @@ def write_dbf(filepath: str | Path, fields: List[Dict[str, Any]], rows: List[Dic
     header_len = 32 + (32 * num_fields) + 1
 
     with open(path, "wb") as fp:
-        # Cabecera principal de 32 bytes (0x03 = dBASE III+/FoxPro sin memo)
         header = struct.pack(
             "<BBBBIHH20x",
             0x03,
@@ -76,16 +75,13 @@ def write_dbf(filepath: str | Path, fields: List[Dict[str, Any]], rows: List[Dic
         )
         fp.write(header)
 
-        # Descriptores de campos (32 bytes cada uno)
         for fname, dbf_type, width, decimals, _ in field_specs:
             name_bytes = fname.encode("ascii", errors="ignore").ljust(11, b"\x00")
             fdesc = struct.pack("<11sc4xBB14x", name_bytes, dbf_type, width, decimals)
             fp.write(fdesc)
 
-        # Terminador de cabecera
         fp.write(b"\x0d")
 
-        # Registros
         for idx, row in enumerate(rows):
             is_del = deleted_flags[idx] if deleted_flags and idx < len(deleted_flags) else False
             fp.write(b"*" if is_del else b" ")
@@ -116,7 +112,6 @@ def write_dbf(filepath: str | Path, fields: List[Dict[str, Any]], rows: List[Dic
                     raw = encoded.ljust(width, b" ")
                 fp.write(raw)
 
-        # Marcador EOF (0x1A)
         fp.write(b"\x1a")
 
     return num_records
@@ -212,7 +207,6 @@ def read_dbf(filepath: str | Path) -> Tuple[List[Dict[str, Any]], List[Dict[str,
 
             rows.append(row)
 
-    # Limpiar clave temporal dbf_type
     for f in fields:
         f.pop("dbf_type", None)
 
@@ -237,6 +231,13 @@ def export_csv(filepath: str | Path, fields: List[Dict[str, Any]], rows: List[Di
     return len(rows)
 
 
+def import_csv(filepath: str | Path) -> List[Dict[str, Any]]:
+    path = Path(filepath)
+    with open(path, "r", newline="", encoding="utf-8") as fp:
+        reader = csv.DictReader(fp)
+        return [{k.strip().lower(): v for k, v in row.items() if k} for row in reader]
+
+
 def export_json(filepath: str | Path, rows: List[Dict[str, Any]]) -> int:
     path = Path(filepath)
 
@@ -248,3 +249,16 @@ def export_json(filepath: str | Path, rows: List[Dict[str, Any]]) -> int:
     with open(path, "w", encoding="utf-8") as fp:
         json.dump(rows, fp, ensure_ascii=False, indent=2, default=_default)
     return len(rows)
+
+
+def import_json(filepath: str | Path) -> List[Dict[str, Any]]:
+    path = Path(filepath)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, list):
+                data = v
+                break
+    if not isinstance(data, list):
+        raise ValueError(f"El archivo JSON '{path}' no contiene una lista de registros.")
+    return [{str(k).lower(): v for k, v in item.items()} for item in data if isinstance(item, dict)]

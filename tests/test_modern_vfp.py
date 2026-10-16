@@ -1,6 +1,8 @@
 """
-Suite de Pruebas Integrales para FoxNext / Modern VFP (64-bit).
-Valida cursores, índices, relaciones, buffering, SQL nativo, DBF binario, OOP y formularios .foxform.
+Suite de Pruebas Integrales para FoxNext / Modern VFP (64-bit) v0.3.0.
+Valida cursores, índices, relaciones, buffering, SQL nativo (SELECT/UPDATE/DELETE),
+SQL Pass-Through (SQLCONNECT/SQLEXEC), APPEND FROM, DBF binario, OOP,
+formularios .foxform, reportes por bandas .foxreport, migrador .scx y FoxNext Studio.
 """
 
 from __future__ import annotations
@@ -10,6 +12,8 @@ from pathlib import Path
 
 from modern_vfp.foxform import FoxForm
 from modern_vfp.interpreter import FoxInterpreter
+from modern_vfp.migrator import create_sample_vfp9_scx
+from modern_vfp.studio import render_studio_snapshot_html, serialize_session_state
 
 
 class TestModernVFP(unittest.TestCase):
@@ -57,7 +61,6 @@ class TestModernVFP(unittest.TestCase):
         self.assertTrue(self.interp.eval_expr("FOUND()"))
         self.assertEqual(self.interp.eval_expr("legajo"), 200)
 
-        # Indexar por legajo y buscar con SEEK
         self.interp.execute(
             """
             INDEX ON legajo TAG idx_leg
@@ -109,11 +112,9 @@ class TestModernVFP(unittest.TestCase):
             """
         )
         self.assertEqual(self.interp.eval_expr("saldo"), 5000.00)
-        # Revertir cambios no confirmados
         self.interp.execute("TABLEREVERT(.T., 'cuentas')")
         self.assertEqual(self.interp.eval_expr("saldo"), 1000.00)
 
-        # Modificar y confirmar con TABLEUPDATE
         self.interp.execute(
             """
             REPLACE saldo WITH 2500.00
@@ -152,6 +153,48 @@ class TestModernVFP(unittest.TestCase):
         )
         self.assertEqual(self.interp.eval_expr("RECCOUNT('curTotales')"), 2)
         self.assertEqual(self.interp.eval_expr("lcGanador"), "Ada")
+
+    def test_sql_update_delete_and_append_from(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_file = Path(tmpdir) / "importar.csv"
+            self.interp.execute(
+                f"""
+                CREATE CURSOR origen (id I, nombre C(25), puntos I)
+                INSERT INTO origen VALUES (1, "Alfa", 10)
+                INSERT INTO origen VALUES (2, "Beta", 20)
+                INSERT INTO origen VALUES (3, "Gamma", 30)
+                COPY TO "{csv_file}" TYPE CSV
+
+                CREATE CURSOR destino (id I, nombre C(25), puntos I)
+                APPEND FROM "{csv_file}" TYPE CSV
+
+                UPDATE destino SET puntos = puntos * 2, nombre = UPPER(nombre) WHERE id >= 2
+                DELETE FROM destino WHERE id = 1
+                SET DELETED ON
+                """
+            )
+            self.interp.execute("SELECT destino\nGO TOP")
+            self.assertEqual(self.interp.eval_expr("id"), 2)
+            self.assertEqual(self.interp.eval_expr("nombre"), "BETA")
+            self.assertEqual(self.interp.eval_expr("puntos"), 40)
+
+    def test_sql_pass_through_sqlconnect_sqlexec(self) -> None:
+        self.interp.execute(
+            """
+            lnHandle = SQLCONNECT(":memory:")
+            =SQLEXEC(lnHandle, "CREATE TABLE sucursales (id INT, ciudad TEXT, meta REAL)")
+            =SQLEXEC(lnHandle, "INSERT INTO sucursales VALUES (1, 'Madrid', 95000.50)")
+            =SQLEXEC(lnHandle, "INSERT INTO sucursales VALUES (2, 'Bogotá', 82000.00)")
+
+            LOCAL lcCiudadFiltro = "Madrid"
+            lnRes = SQLEXEC(lnHandle, "SELECT * FROM sucursales WHERE ciudad = ?lcCiudadFiltro", "curRemoto")
+            =SQLDISCONNECT(lnHandle)
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnRes"), 1)
+        self.assertEqual(self.interp.eval_expr("RECCOUNT('curRemoto')"), 1)
+        self.assertEqual(self.interp.eval_expr("curRemoto.ciudad"), "Madrid")
+        self.assertAlmostEqual(self.interp.eval_expr("curRemoto.meta"), 95000.50)
 
     def test_set_relation_synchronization(self) -> None:
         self.interp.execute(
@@ -218,22 +261,72 @@ class TestModernVFP(unittest.TestCase):
             self.assertEqual(self.interp.eval_expr("nombre"), "Grace Hopper")
             self.assertTrue(self.interp.eval_expr("vip"))
 
-    def test_foxform_declarative_binding(self) -> None:
+    def test_foxform_and_do_form_command(self) -> None:
         form_path = Path(__file__).resolve().parent.parent / "examples" / "clientes.foxform"
-        form = FoxForm.from_file(form_path, interpreter=self.interp)
-        form.initialize()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_out = Path(tmpdir) / "clientes.html"
+            self.interp.execute(f'DO FORM "{form_path}" TO FILE "{html_out}"')
+            self.assertTrue(html_out.is_file())
+            self.assertIn("Ada Lovelace", html_out.read_text(encoding="utf-8"))
 
-        # El primer registro en clientes debe ser Ada Lovelace
-        self.assertEqual(form.read_control_value("txtNombre"), "Ada Lovelace")
+            form_obj: FoxForm = self.interp.eval_expr("frmClientes")
+            form_obj.write_control_value("txtNombre", "Ada Byron Lovelace")
+            self.assertEqual(self.interp.eval_expr("clientes.nombre"), "Ada Byron Lovelace")
 
-        # Modificar el valor del control actualiza el cursor subyacente automáticamente
-        form.write_control_value("txtNombre", "Ada Byron Lovelace")
-        self.assertEqual(self.interp.eval_expr("clientes.nombre"), "Ada Byron Lovelace")
+    def test_foxreport_and_report_form_command(self) -> None:
+        root_dir = Path(__file__).resolve().parent.parent
+        demo_prg = root_dir / "examples" / "demo_ventas.prg"
+        report_file = root_dir / "examples" / "ventas.foxreport"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            txt_out = Path(tmpdir) / "reporte.txt"
+            html_out = Path(tmpdir) / "reporte.html"
+            self.interp.execute(
+                f"""
+                DO "{demo_prg}"
+                REPORT FORM "{report_file}" TO FILE "{txt_out}"
+                REPORT FORM "{report_file}" FOR total_ventas > 7000 TO FILE "{html_out}"
+                """
+            )
+            txt_content = txt_out.read_text(encoding="utf-8")
+            html_content = html_out.read_text(encoding="utf-8")
+            self.assertIn("REPORTE EJECUTIVO DE FACTURACIÓN POR CLIENTE", txt_content)
+            self.assertIn("$22,601.25", txt_content)
+            self.assertIn("Grace Hopper", html_content)
+            self.assertNotIn("Alan Turing", html_content)
 
-        # Confirmar con el botón btnGuardar
-        form.trigger_click("btnGuardar")
-        tui = form.render_tui()
-        self.assertIn("Ada Byron Lovelace", tui)
+    def test_vfp9_scx_migrator_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scx_file = Path(tmpdir) / "inventario.scx"
+            foxform_file = Path(tmpdir) / "inventario.foxform"
+            create_sample_vfp9_scx(scx_file)
+
+            self.interp.execute(
+                f"""
+                MIGRATE SCX "{scx_file}" TO "{foxform_file}"
+                DO FORM "{foxform_file}"
+                """
+            )
+            self.assertTrue(foxform_file.is_file())
+            self.assertEqual(self.interp.eval_expr("articulos.descripcion"), "Teclado IBM Model M")
+            self.assertEqual(self.interp.eval_expr("articulos.stock"), 15)
+
+            # Disparar el evento Click migrado del botón VFP9
+            frm: FoxForm = self.interp.eval_expr("frmInventario")
+            frm.trigger_click("btnAgregarStock")
+            self.assertEqual(self.interp.eval_expr("articulos.stock"), 20)
+
+    def test_studio_session_serialization(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR test_studio (id I, titulo C(20))
+            INSERT INTO test_studio VALUES (1, "FoxNext Studio")
+            """
+        )
+        state = serialize_session_state(self.interp)
+        self.assertEqual(len(state["workAreas"]), 1)
+        self.assertEqual(state["workAreas"][0]["alias"], "TEST_STUDIO")
+        html_snap = render_studio_snapshot_html(self.interp)
+        self.assertIn("FoxNext Studio", html_snap)
 
 
 if __name__ == "__main__":

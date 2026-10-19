@@ -374,6 +374,48 @@ class Cursor:
             return
         self.records[self._recno - 1][fl] = self.field_map[fl].coerce(value)
 
+    def alter_add_column(self, field_def: FieldDef) -> None:
+        fl = field_def.name.lower()
+        field_def.name = fl
+        if fl in self.field_map:
+            raise ValueError(f"La columna '{fl}' ya existe en el cursor '{self.alias}'.")
+        self.fields.append(field_def)
+        self.field_map[fl] = field_def
+        default_v = field_def.default_value()
+        for rec in self.records:
+            rec[fl] = default_v
+
+    def alter_drop_column(self, col_name: str) -> None:
+        fl = col_name.strip().lower()
+        if fl not in self.field_map:
+            raise KeyError(f"La columna '{col_name}' no existe en el cursor '{self.alias}'.")
+        self.fields = [f for f in self.fields if f.name != fl]
+        self.field_map.pop(fl, None)
+        for rec in self.records:
+            rec.pop(fl, None)
+
+    def copy_to_array(self, set_deleted_on: bool = False) -> List[List[Any]]:
+        vis = self.visible_recnos(set_deleted_on)
+        result: List[List[Any]] = []
+        for r in vis:
+            rec = self.records[r - 1]
+            result.append([rec.get(f.name) for f in self.fields])
+        return result
+
+    def append_from_array(self, arr_data: Any) -> int:
+        if not isinstance(arr_data, list) or not arr_data:
+            return 0
+        # Si es un arreglo 1D de valores escalares, lo tratamos como una sola fila
+        rows = arr_data if isinstance(arr_data[0], (list, tuple)) else [arr_data]
+        added = 0
+        for row_vals in rows:
+            self.append_blank()
+            for idx, f in enumerate(self.fields):
+                if idx < len(row_vals):
+                    self.records[self._recno - 1][f.name] = f.coerce(row_vals[idx])
+            added += 1
+        return added
+
     def delete_current(self) -> None:
         if 1 <= self._recno <= len(self.deleted_flags):
             self.deleted_flags[self._recno - 1] = True

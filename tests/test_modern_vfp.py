@@ -418,6 +418,126 @@ WHERE total_ventas >= <<lnLimite>>
             run_foxapp(app_out, fresh_interp)
             self.assertEqual(fresh_interp.eval_expr("RECCOUNT('curRanking')"), 3)
 
+    def test_arrays_and_collections(self) -> None:
+        self.interp.execute(
+            """
+            DIMENSION laPrecios[3]
+            laPrecios[1] = 300
+            laPrecios[2] = 100
+            laPrecios[3] = 200
+            =ASORT(laPrecios)
+            lnPos = ASCAN(laPrecios, 200)
+            lnTotalElem = ALEN(laPrecios)
+
+            CREATE CURSOR orig_arr (id I, etiqueta C(15))
+            INSERT INTO orig_arr VALUES (1, "Uno")
+            INSERT INTO orig_arr VALUES (2, "Dos")
+            COPY TO ARRAY laCopia
+
+            CREATE CURSOR dest_arr (id I, etiqueta C(15))
+            APPEND FROM ARRAY laCopia
+
+            loCol = CREATEOBJECT("Collection")
+            loCol.Add("Valor A", "clave_a")
+            loCol.Add("Valor B", "clave_b")
+            lcItemA = loCol.Item("clave_a")
+            lnColCount = loCol.Count
+
+            lcExtraido = STREXTRACT("<tag>FoxNext 64</tag>", "<tag>", "</tag>")
+            lcPalabra2 = GETWORDNUM("Visual FoxPro Moderno", 2)
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnPos"), 2)
+        self.assertEqual(self.interp.eval_expr("lnTotalElem"), 3)
+        self.assertEqual(self.interp.eval_expr("RECCOUNT('dest_arr')"), 2)
+        self.assertEqual(self.interp.eval_expr("lcItemA"), "Valor A")
+        self.assertEqual(self.interp.eval_expr("lnColCount"), 2)
+        self.assertEqual(self.interp.eval_expr("lcExtraido"), "FoxNext 64")
+        self.assertEqual(self.interp.eval_expr("lcPalabra2"), "FoxPro")
+
+    def test_alter_table_add_drop_column(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR clientes_alt (id I, nombre C(25))
+            INSERT INTO clientes_alt VALUES (1, "Ada Lovelace")
+
+            ALTER TABLE clientes_alt ADD COLUMN email C(50)
+            ALTER TABLE clientes_alt ADD COLUMN puntos I
+            REPLACE email WITH "ada@foxnext.dev", puntos WITH 100
+
+            ALTER TABLE clientes_alt DROP COLUMN nombre
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("FCOUNT('clientes_alt')"), 3)
+        self.assertEqual(self.interp.eval_expr("clientes_alt.email"), "ada@foxnext.dev")
+        self.assertEqual(self.interp.eval_expr("clientes_alt.puntos"), 100)
+
+    def test_lsp_static_analysis_and_completions(self) -> None:
+        from modern_vfp.lsp import analyze_fox_source, get_completions
+
+        valid_code = """
+        CREATE CURSOR productos (id I, descripcion C(40), precio N(10,2))
+        FUNCTION CalcularDescuento(tnPrecio)
+            IF tnPrecio > 100
+                RETURN tnPrecio * 0.90
+            ENDIF
+            RETURN tnPrecio
+        ENDFUNC
+        """
+        analysis = analyze_fox_source(valid_code)
+        self.assertEqual(len(analysis["diagnostics"]), 0)
+        kinds = {s["name"]: s["kind"] for s in analysis["symbols"]}
+        self.assertEqual(kinds.get("productos"), "Cursor")
+        self.assertEqual(kinds.get("CalcularDescuento"), "Function")
+
+        broken_code = "IF x > 10\n  ? 'Hola'\nENDSCAN"
+        broken_res = analyze_fox_source(broken_code)
+        self.assertGreaterEqual(len(broken_res["diagnostics"]), 1)
+
+        self.interp.execute("CREATE CURSOR clientes (id I, nombre C(30), saldo Y)")
+        comps = get_completions("clientes.n", self.interp)
+        self.assertEqual(len(comps), 1)
+        self.assertEqual(comps[0]["insertText"], "nombre")
+
+    def test_rest_api_microservice_dispatcher(self) -> None:
+        from modern_vfp.apiserver import dispatch_api_request
+
+        self.interp.execute(
+            """
+            CREATE CURSOR catalogo (id I, producto C(30), precio N(10,2))
+            INSERT INTO catalogo VALUES (1, "Lapiz", 1.50)
+
+            FUNCTION SumarValores(a, b)
+                RETURN a + b
+            ENDFUNC
+            """
+        )
+        status, list_resp = dispatch_api_request(self.interp, "GET", "/api/cursors")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(list_resp["cursors"]), 1)
+
+        status, post_resp = dispatch_api_request(
+            self.interp,
+            "POST",
+            "/api/cursors/catalogo",
+            {"id": 2, "producto": "Cuaderno", "precio": 4.25},
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(post_resp["reccount"], 2)
+
+        status, get_resp = dispatch_api_request(self.interp, "GET", "/api/cursors/catalogo")
+        self.assertEqual(status, 200)
+        self.assertEqual(get_resp["count"], 2)
+
+        status, rpc_resp = dispatch_api_request(
+            self.interp,
+            "POST",
+            "/api/rpc/SumarValores",
+            {"args": [15, 27]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(rpc_resp["result"], 42)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -454,6 +454,71 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read().decode("utf-8", errors="replace")
 
+    # --- Funciones de Arreglos y Extracción de Palabras ---
+    def fn_alen(arr: Any, attr: int = 0) -> int:
+        if not isinstance(arr, list):
+            return 0
+        a = int(attr)
+        if a == 1:
+            return len(arr)
+        if a == 2:
+            return len(arr[0]) if (arr and isinstance(arr[0], list)) else 0
+        if arr and isinstance(arr[0], list):
+            return sum(len(r) for r in arr)
+        return len(arr)
+
+    def fn_ascan(arr: Any, expr: Any) -> int:
+        if not isinstance(arr, list):
+            return 0
+        flat = [item for sub in arr for item in (sub if isinstance(sub, list) else [sub])]
+        for idx, val in enumerate(flat, start=1):
+            if val == expr:
+                return idx
+        return 0
+
+    def fn_asort(arr: Any, start_elem: int = 1, num_elems: int = -1, sort_order: int = 0) -> int:
+        if not isinstance(arr, list):
+            return -1
+        rev = int(sort_order) != 0
+        arr.sort(key=lambda x: (str(type(x)), x), reverse=rev)
+        return 1
+
+    def fn_getwordcount(s: Any, delimiters: str = " \t\r\n") -> int:
+        text = str(s or "")
+        if not text:
+            return 0
+        import re as _re
+
+        pat = "[" + _re.escape(delimiters) + "]+"
+        words = [w for w in _re.split(pat, text) if w]
+        return len(words)
+
+    def fn_getwordnum(s: Any, index: int, delimiters: str = " \t\r\n") -> str:
+        text = str(s or "")
+        if not text:
+            return ""
+        import re as _re
+
+        pat = "[" + _re.escape(delimiters) + "]+"
+        words = [w for w in _re.split(pat, text) if w]
+        idx = int(index) - 1
+        return words[idx] if 0 <= idx < len(words) else ""
+
+    def fn_strextract(s: Any, begin_delim: str, end_delim: str = "", occurrence: int = 1) -> str:
+        text = str(s or "")
+        b = str(begin_delim)
+        e = str(end_delim)
+        pos = -1
+        for _ in range(max(1, int(occurrence))):
+            pos = text.find(b, pos + 1)
+            if pos == -1:
+                return ""
+        start = pos + len(b)
+        if not e:
+            return text[start:]
+        end = text.find(e, start)
+        return text[start:end] if end != -1 else ""
+
     # --- Funciones de Archivos y JSON ---
     def fn_file(filepath: Any) -> bool:
         return Path(str(filepath)).is_file()
@@ -561,6 +626,12 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         "jsontocursor": fn_jsontocursor,
         "httpget": fn_httpget,
         "httppost": fn_httppost,
+        "alen": fn_alen,
+        "ascan": fn_ascan,
+        "asort": fn_asort,
+        "getwordcount": fn_getwordcount,
+        "getwordnum": fn_getwordnum,
+        "strextract": fn_strextract,
         "file": fn_file,
         "filetostr": fn_filetostr,
         "strtofile": fn_strtofile,

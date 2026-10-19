@@ -195,6 +195,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[FoxProject] Aplicación empaquetada exitosamente en: {out}")
         return 0
 
+    if args[0] == "--check" and len(args) >= 2:
+        from .lsp import analyze_fox_source
+
+        src = Path(args[1]).read_text(encoding="utf-8")
+        res = analyze_fox_source(src)
+        print(f"=== Análisis Estático FoxNext LSP: {args[1]} ===")
+        print(f"Símbolos detectados ({len(res['symbols'])}):")
+        for sym in res["symbols"]:
+            print(f"  - [{sym['kind']}] {sym['name']} (Línea {sym['line']})")
+        if res["diagnostics"]:
+            print(f"\nDiagnósticos ({len(res['diagnostics'])}):")
+            for d in res["diagnostics"]:
+                print(f"  [!] Línea {d['line']}: {d['message']}")
+            return 1
+        print("\nSin errores de sintaxis o bloques.")
+        return 0
+
+    if args[0] == "--api":
+        from .apiserver import start_api_server
+
+        if len(args) >= 2 and not args[1].isdigit():
+            code = Path(args[1]).read_text(encoding="utf-8")
+            interp.execute(code)
+            port = int(args[2]) if len(args) >= 3 and args[2].isdigit() else 8766
+        else:
+            port = int(args[1]) if len(args) >= 2 and args[1].isdigit() else 8766
+        start_api_server(interp, port=port)
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)

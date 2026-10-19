@@ -70,6 +70,84 @@ class VFPObject:
         return f"<Object:{self.__vfp_class__} {self._props}>"
 
 
+class VFPCollection:
+    """
+    Implementación de la clase nativa CREATEOBJECT('Collection') de Visual FoxPro.
+    Soporta .Add(val [, key]), .Item(idx_or_key), .Remove(idx_or_key), .GetKey(idx) y .Count.
+    """
+
+    def __init__(self) -> None:
+        self.__vfp_class__ = "Collection"
+        self._items: List[Any] = []
+        self._keys: List[Optional[str]] = []
+
+    @property
+    def count(self) -> int:
+        return len(self._items)
+
+    def add(self, item: Any, key: Optional[str] = None) -> int:
+        if key is not None:
+            k_str = str(key)
+            if k_str in self._keys:
+                raise KeyError(f"La clave '{k_str}' ya existe en la colección.")
+            self._keys.append(k_str)
+        else:
+            self._keys.append(None)
+        self._items.append(item)
+        return len(self._items)
+
+    def item(self, idx_or_key: int | str) -> Any:
+        if isinstance(idx_or_key, int):
+            idx = idx_or_key - 1  # 1-based en VFP
+            if 0 <= idx < len(self._items):
+                return self._items[idx]
+            raise IndexError(f"Índice de colección fuera de rango: {idx_or_key}")
+        k_str = str(idx_or_key)
+        if k_str in self._keys:
+            return self._items[self._keys.index(k_str)]
+        raise KeyError(f"Clave '{k_str}' no encontrada en la colección.")
+
+    def remove(self, idx_or_key: int | str) -> int:
+        if idx_or_key == -1:
+            self._items.clear()
+            self._keys.clear()
+            return 0
+        if isinstance(idx_or_key, int):
+            idx = idx_or_key - 1
+            if 0 <= idx < len(self._items):
+                self._items.pop(idx)
+                self._keys.pop(idx)
+                return len(self._items)
+            raise IndexError(f"Índice fuera de rango en Remove: {idx_or_key}")
+        k_str = str(idx_or_key)
+        if k_str in self._keys:
+            pos = self._keys.index(k_str)
+            self._items.pop(pos)
+            self._keys.pop(pos)
+            return len(self._items)
+        raise KeyError(f"Clave '{k_str}' no encontrada en Remove.")
+
+    def getkey(self, idx: int) -> str:
+        pos = int(idx) - 1
+        if 0 <= pos < len(self._keys):
+            return self._keys[pos] or ""
+        return ""
+
+    def __getattr__(self, name: str) -> Any:
+        nl = name.lower()
+        if nl == "count":
+            return self.count
+        if nl == "add":
+            return self.add
+        if nl == "item":
+            return self.item
+        if nl == "remove":
+            return self.remove
+        if nl == "getkey":
+            return self.getkey
+        raise AttributeError(f"Miembro '{name}' no existe en Collection.")
+
+
 class _AliasProxy:
     """
     Permite resolver expresiones del tipo `clientes.nombre` o `THIS.propiedad` dentro del evaluador.
@@ -226,10 +304,12 @@ class FoxInterpreter:
             else:
                 self.global_vars[nl] = val
 
-    def create_object(self, class_name: str, *args: Any) -> VFPObject:
+    def create_object(self, class_name: str, *args: Any) -> Any:
         cl = class_name.strip().lower()
         if cl == "empty":
             return VFPObject("Empty", {}, {}, self)
+        if cl == "collection":
+            return VFPCollection()
         if cl not in self.classes:
             raise ValueError(f"La clase '{class_name}' no está definida.")
         parent, prop_lines, methods = self.classes[cl]
@@ -1508,6 +1588,64 @@ class FoxInterpreter:
             self.emit(f"[FoxProject] Aplicación empaquetada en '{built_path}'")
             return
 
+        # 16m. DIMENSION / DECLARE laArr[n] o laMat[r, c]
+        m_dim = re.match(r"^(?:DIMENSION|DECLARE)\s+(.*)$", line, flags=re.IGNORECASE)
+        if m_dim:
+            for item in self._split_top_level(m_dim.group(1).strip(), ","):
+                m_a = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[\[\(]\s*(\d+)(?:\s*,\s*(\d+))?\s*[\]\)]$", item.strip())
+                if not m_a:
+                    raise SyntaxError(f"Declaración DIMENSION inválida: '{item}'")
+                aname = m_a.group(1)
+                rows_n = int(m_a.group(2))
+                cols_n = int(m_a.group(3)) if m_a.group(3) else 0
+                if cols_n > 0:
+                    arr_val: Any = [[False for _ in range(cols_n)] for _ in range(rows_n)]
+                else:
+                    arr_val = [False for _ in range(rows_n)]
+                self.set_var(aname, arr_val)
+            return
+
+        # 16n. COPY TO ARRAY <arr_name>
+        m_cta = re.match(r"^COPY\s+TO\s+ARRAY\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", line, flags=re.IGNORECASE)
+        if m_cta:
+            cur = self._require_cursor("COPY TO ARRAY")
+            self.set_var(m_cta.group(1), cur.copy_to_array(self.wam.set_deleted))
+            return
+
+        # 16o. APPEND FROM ARRAY <arr_name>
+        m_afa = re.match(r"^APPEND\s+FROM\s+ARRAY\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", line, flags=re.IGNORECASE)
+        if m_afa:
+            cur = self._require_cursor("APPEND FROM ARRAY")
+            arr_data = self.eval_expr(m_afa.group(1))
+            cur.append_from_array(arr_data)
+            return
+
+        # 16p. ALTER TABLE / ALTER CURSOR <alias> ADD COLUMN / DROP COLUMN
+        m_alt_add = re.match(
+            r"^ALTER\s+(?:TABLE|CURSOR)\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+(?:COLUMN\s+)?(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_alt_add:
+            cur = self.wam.get_cursor(m_alt_add.group(1))
+            if cur is None:
+                raise RuntimeError(f"El cursor '{m_alt_add.group(1)}' no existe para ALTER TABLE.")
+            for fdef in parse_schema_string(m_alt_add.group(2).strip()):
+                cur.alter_add_column(fdef)
+            return
+
+        m_alt_drop = re.match(
+            r"^ALTER\s+(?:TABLE|CURSOR)\s+([A-Za-z_][A-Za-z0-9_]*)\s+DROP\s+(?:COLUMN\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_alt_drop:
+            cur = self.wam.get_cursor(m_alt_drop.group(1))
+            if cur is None:
+                raise RuntimeError(f"El cursor '{m_alt_drop.group(1)}' no existe para ALTER TABLE.")
+            cur.alter_drop_column(m_alt_drop.group(2))
+            return
+
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]
         m_do = re.match(r'^DO\s+([^\s]+)(?:\s+WITH\s+(.*))?$', line, flags=re.IGNORECASE)
         if m_do and not re.match(r"^DO\s+(?:WHILE|CASE|FORM)\b", line, flags=re.IGNORECASE):
@@ -1528,6 +1666,25 @@ class FoxInterpreter:
                 self.execute(code)
                 return
             raise RuntimeError(f"No se encontró el procedimiento o programa '{target}'.")
+
+        # 18a. Asignación de elemento de arreglo 1-based (`laArr[1] = expr` o `laMat[2, 1] = expr`)
+        m_arr_set = re.match(
+            r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*(.+?)(?:\s*,\s*(.+?))?\s*\]\s*=\s*(.+)$",
+            line,
+        )
+        if m_arr_set:
+            aname = m_arr_set.group(1).lower()
+            idx1 = int(self.eval_expr(m_arr_set.group(2))) - 1
+            idx2 = int(self.eval_expr(m_arr_set.group(3))) - 1 if m_arr_set.group(3) else None
+            rhs_val = self.eval_expr(m_arr_set.group(4))
+            arr_obj = self.current_vars().get(aname)
+            if not isinstance(arr_obj, list):
+                raise TypeError(f"'{aname}' no es un arreglo dimensionado.")
+            if idx2 is not None:
+                arr_obj[idx1][idx2] = rhs_val
+            else:
+                arr_obj[idx1] = rhs_val
+            return
 
         # 18. Asignación de Variable / Propiedad (`x = expr`)
         m_assign = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.+)$", line)

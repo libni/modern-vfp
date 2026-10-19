@@ -13,23 +13,48 @@ from .foxform import FoxForm
 from .foxreport import FoxReport
 from .interpreter import FoxInterpreter
 from .migrator import migrate_scx_to_foxform
+from .project import FoxProject, run_foxapp
 from .studio import start_studio_server
 
 
-BLOCK_OPENERS = ("IF ", "DO WHILE ", "DO CASE", "FOR ", "SCAN", "TRY", "PROCEDURE ", "FUNCTION ", "DEFINE CLASS ")
-BLOCK_CLOSERS = ("ENDIF", "ENDDO", "ENDCASE", "ENDFOR", "NEXT", "ENDSCAN", "ENDTRY", "ENDPROC", "ENDFUNC", "ENDDEFINE")
+BLOCK_OPENERS = (
+    "IF ",
+    "DO WHILE ",
+    "DO CASE",
+    "FOR ",
+    "SCAN",
+    "TRY",
+    "PROCEDURE ",
+    "FUNCTION ",
+    "DEFINE CLASS ",
+    "TEXT TO ",
+)
+BLOCK_CLOSERS = (
+    "ENDIF",
+    "ENDDO",
+    "ENDCASE",
+    "ENDFOR",
+    "NEXT",
+    "ENDSCAN",
+    "ENDTRY",
+    "ENDPROC",
+    "ENDFUNC",
+    "ENDDEFINE",
+    "ENDTEXT",
+)
 
 
 def format_status_bar(interp: FoxInterpreter) -> str:
     cur = interp.wam.current_cursor()
     area = interp.wam.current_area
     del_state = "DEL:ON" if interp.wam.set_deleted else "DEL:OFF"
+    txn = f" | TXN:{interp.wam.txn_level()}" if interp.wam.txn_level() > 0 else ""
     if cur is None:
-        return f"[Area:{area} | Sin Cursor | {del_state}]"
+        return f"[Area:{area} | Sin Cursor | {del_state}{txn}]"
     rec = f"{cur.recno()}/{cur.reccount()}"
     eof_flag = "EOF" if cur.eof else "OK"
     tag = f" | Tag:{cur.active_tag}" if cur.active_tag else ""
-    return f"[Area:{area} | Alias:{cur.alias.upper()} | Rec:{rec} ({eof_flag}){tag} | {del_state}]"
+    return f"[Area:{area} | Alias:{cur.alias.upper()} | Rec:{rec} ({eof_flag}){tag} | {del_state}{txn}]"
 
 
 def run_repl(initial_interp: Optional[FoxInterpreter] = None) -> None:
@@ -101,6 +126,11 @@ Comandos Principales en FoxNext Command Window:
   CREATE CURSOR <alias> (id I, nombre C(40), saldo Y, activo L, fecha D)
   APPEND BLANK | APPEND FROM <archivo.csv|.json|.dbf> | INSERT INTO <alias> VALUES (...)
   REPLACE <campo> WITH <valor> [ALL] [FOR <condicion>]
+  SCATTER NAME <loObj> [BLANK] | GATHER NAME <loObj>
+  CALCULATE SUM(x), AVG(x), COUNT() [FOR <cond>] TO v1, v2, v3
+  TEXT TO <lcVar> [TEXTMERGE] [NOSHOW] ... ENDTEXT
+  BEGIN TRANSACTION | END TRANSACTION | ROLLBACK | TXNLEVEL()
+  CURSORTOJSON([alias]) | JSONTOCURSOR(lcJson, alias)
   SELECT * FROM <alias> WHERE <cond> INTO CURSOR <nuevo_alias>
   UPDATE <alias> SET <campo> = <expr> WHERE <cond>
   DELETE FROM <alias> WHERE <cond>
@@ -115,6 +145,7 @@ Comandos Principales en FoxNext Command Window:
   DO <archivo.prg> | DO FORM <archivo.foxform>
   REPORT FORM <archivo.foxreport> [FOR <cond>] [TO FILE <salida.html|.txt>]
   MIGRATE SCX <archivo.scx> TO <salida.foxform>
+  BUILD APP <salida.foxapp> FROM <proyecto.foxproj>
   STATUS | CLEAR | QUIT
 """
     )
@@ -130,7 +161,7 @@ def _print_status(interp: FoxInterpreter) -> None:
             f" {active_mark} Area {area}: {cur.alias.upper()} "
             f"(Registros: {cur.reccount()}, RECNO: {cur.recno()}, Campos: {len(cur.fields)}, Tag: {cur.active_tag or 'Ninguno'})"
         )
-    print(f"  SET DELETED: {'ON' if interp.wam.set_deleted else 'OFF'}\n")
+    print(f"  SET DELETED: {'ON' if interp.wam.set_deleted else 'OFF'} | TXNLEVEL: {interp.wam.txn_level()}\n")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -158,20 +189,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[vfp2modern] Migrado exitosamente: {args[1]} -> {args[2]}")
         return 0
 
+    if args[0] == "--build" and len(args) >= 3:
+        proj = FoxProject.from_file(args[1])
+        out = proj.build_app(args[2])
+        print(f"[FoxProject] Aplicación empaquetada exitosamente en: {out}")
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)
         return 1
 
-    if target_path.suffix.lower() == ".foxform":
+    ext = target_path.suffix.lower()
+    if ext == ".foxform":
         form = FoxForm.from_file(target_path, interpreter=interp)
         form.initialize()
         print(form.render_tui())
         return 0
 
-    if target_path.suffix.lower() == ".foxreport":
+    if ext == ".foxreport":
         report = FoxReport.from_file(target_path, interpreter=interp)
         print(report.render_text())
+        return 0
+
+    if ext == ".foxapp":
+        run_foxapp(target_path, interp)
         return 0
 
     code = target_path.read_text(encoding="utf-8")

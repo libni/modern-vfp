@@ -1,8 +1,9 @@
 """
-Suite de Pruebas Integrales para FoxNext / Modern VFP (64-bit) v0.3.0.
-Valida cursores, índices, relaciones, buffering, SQL nativo (SELECT/UPDATE/DELETE),
-SQL Pass-Through (SQLCONNECT/SQLEXEC), APPEND FROM, DBF binario, OOP,
-formularios .foxform, reportes por bandas .foxreport, migrador .scx y FoxNext Studio.
+Suite de Pruebas Integrales para FoxNext / Modern VFP (64-bit) v0.4.0.
+Valida cursores, índices, relaciones, buffering, transacciones (BEGIN/END/ROLLBACK),
+SCATTER/GATHER, CALCULATE, TEXT...ENDTEXT, CURSORTOJSON/JSONTOCURSOR,
+SQL nativo (SELECT/UPDATE/DELETE), SQL Pass-Through (SQLCONNECT/SQLEXEC),
+APPEND FROM, DBF binario, OOP, .foxform, .foxreport, migrador .scx, .foxproj/.foxapp y Studio.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 from modern_vfp.foxform import FoxForm
 from modern_vfp.interpreter import FoxInterpreter
 from modern_vfp.migrator import create_sample_vfp9_scx
+from modern_vfp.project import run_foxapp
 from modern_vfp.studio import render_studio_snapshot_html, serialize_session_state
 
 
@@ -310,7 +312,6 @@ class TestModernVFP(unittest.TestCase):
             self.assertEqual(self.interp.eval_expr("articulos.descripcion"), "Teclado IBM Model M")
             self.assertEqual(self.interp.eval_expr("articulos.stock"), 15)
 
-            # Disparar el evento Click migrado del botón VFP9
             frm: FoxForm = self.interp.eval_expr("frmInventario")
             frm.trigger_click("btnAgregarStock")
             self.assertEqual(self.interp.eval_expr("articulos.stock"), 20)
@@ -327,6 +328,95 @@ class TestModernVFP(unittest.TestCase):
         self.assertEqual(state["workAreas"][0]["alias"], "TEST_STUDIO")
         html_snap = render_studio_snapshot_html(self.interp)
         self.assertIn("FoxNext Studio", html_snap)
+
+    def test_scatter_gather_and_calculate(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR nomina (id I, empleado C(30), sueldo N(10,2))
+            INSERT INTO nomina VALUES (1, "Carlos", 3000.00)
+            INSERT INTO nomina VALUES (2, "Elena", 4500.00)
+            INSERT INTO nomina VALUES (3, "Marcos", 2500.00)
+
+            GO TOP
+            SCATTER NAME loEmp
+            loEmp.sueldo = 3800.00
+            loEmp.empleado = "Carlos Actualizado"
+            GATHER NAME loEmp
+
+            SCATTER NAME loNuevo BLANK
+            loNuevo.id = 4
+            loNuevo.empleado = "Lucia"
+            loNuevo.sueldo = 5200.00
+            APPEND BLANK
+            GATHER NAME loNuevo
+
+            CALCULATE SUM(sueldo), AVG(sueldo), COUNT(), MAX(sueldo) FOR sueldo >= 3500 TO lnSuma, lnProm, lnCant, lnMax
+            """
+        )
+        self.interp.execute("GO TOP")
+        self.assertEqual(self.interp.eval_expr("empleado"), "Carlos Actualizado")
+        self.assertEqual(self.interp.eval_expr("sueldo"), 3800.00)
+        self.assertEqual(self.interp.eval_expr("RECCOUNT()"), 4)
+        self.assertAlmostEqual(self.interp.eval_expr("lnSuma"), 13500.00)
+        self.assertAlmostEqual(self.interp.eval_expr("lnProm"), 4500.00)
+        self.assertEqual(self.interp.eval_expr("lnCant"), 3)
+        self.assertAlmostEqual(self.interp.eval_expr("lnMax"), 5200.00)
+
+    def test_text_endtext_textmerge(self) -> None:
+        self.interp.execute(
+            """
+            LOCAL lcTabla = "clientes"
+            LOCAL lnLimite = 5000
+            TEXT TO lcConsulta TEXTMERGE NOSHOW
+SELECT id, nombre
+FROM <<lcTabla>>
+WHERE total_ventas >= <<lnLimite>>
+            ENDTEXT
+            """
+        )
+        expected = "SELECT id, nombre\nFROM clientes\nWHERE total_ventas >= 5000"
+        self.assertEqual(self.interp.eval_expr("lcConsulta"), expected)
+
+    def test_multilevel_transactions_and_json_cursor(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR bancos (id I, titular C(25), balance N(12,2))
+            INSERT INTO bancos VALUES (1, "Cuenta Principal", 10000.00)
+
+            BEGIN TRANSACTION
+            REPLACE balance WITH 8000.00
+            lnNivel1 = TXNLEVEL()
+
+            BEGIN TRANSACTION
+            REPLACE balance WITH 100.00
+            lnNivel2 = TXNLEVEL()
+            ROLLBACK
+
+            lnBalanceTrasRollbackInterno = bancos.balance
+            END TRANSACTION
+
+            lcJson = CURSORTOJSON("bancos")
+            =JSONTOCURSOR(lcJson, "bancos_clon")
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnNivel1"), 1)
+        self.assertEqual(self.interp.eval_expr("lnNivel2"), 2)
+        self.assertEqual(self.interp.eval_expr("TXNLEVEL()"), 0)
+        self.assertEqual(self.interp.eval_expr("lnBalanceTrasRollbackInterno"), 8000.00)
+        self.assertEqual(self.interp.eval_expr("bancos_clon.balance"), 8000.00)
+        self.assertEqual(self.interp.eval_expr("bancos_clon.titular"), "Cuenta Principal")
+
+    def test_project_build_app_and_execution(self) -> None:
+        root_dir = Path(__file__).resolve().parent.parent
+        proj_file = root_dir / "examples" / "ventas.foxproj"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app_out = Path(tmpdir) / "ventas.foxapp"
+            self.interp.execute(f'BUILD APP "{app_out}" FROM "{proj_file}"')
+            self.assertTrue(app_out.is_file())
+
+            fresh_interp = FoxInterpreter()
+            run_foxapp(app_out, fresh_interp)
+            self.assertEqual(fresh_interp.eval_expr("RECCOUNT('curRanking')"), 3)
 
 
 if __name__ == "__main__":

@@ -368,8 +368,26 @@ class FoxInterpreter:
         raw_lines = source.splitlines()
         logical_lines: List[str] = []
         buffer = ""
+        in_text_block = False
 
         for raw in raw_lines:
+            stripped_raw = raw.strip()
+            if in_text_block:
+                if re.match(r"^ENDTEXT\b", stripped_raw, flags=re.IGNORECASE):
+                    in_text_block = False
+                    logical_lines.append("ENDTEXT")
+                else:
+                    logical_lines.append(raw)
+                continue
+
+            if re.match(r"^TEXT\s+TO\b", stripped_raw, flags=re.IGNORECASE):
+                if buffer.strip():
+                    logical_lines.append(buffer.strip())
+                    buffer = ""
+                logical_lines.append(stripped_raw)
+                in_text_block = True
+                continue
+
             # Eliminar comentarios inline && fuera de comillas
             line = self._strip_inline_comment(raw).strip()
             if not line:
@@ -656,6 +674,40 @@ class FoxInterpreter:
                     if finally_blk is not None:
                         self._exec_block(finally_blk)
                 i = end_idx + 1
+                continue
+
+            # Estructura TEXT TO <var> [ADDITIVE] [TEXTMERGE] [NOSHOW] ... ENDTEXT
+            m_txt = re.match(
+                r"^TEXT\s+TO\s+([A-Za-z_][A-Za-z0-9_]*)(.*)$",
+                line,
+                flags=re.IGNORECASE,
+            )
+            if m_txt:
+                var_name = m_txt.group(1)
+                flags_str = (m_txt.group(2) or "").upper()
+                is_additive = "ADDITIVE" in flags_str
+                is_textmerge = "TEXTMERGE" in flags_str
+                is_noshow = "NOSHOW" in flags_str
+                text_lines: List[str] = []
+                i += 1
+                while i < n and not re.match(r"^ENDTEXT\b", lines[i].strip(), flags=re.IGNORECASE):
+                    raw_tl = lines[i]
+                    if is_textmerge or ("<<" in raw_tl and ">>" in raw_tl):
+                        raw_tl = re.sub(
+                            r"<<(.+?)>>",
+                            lambda m: self.functions["transform"](self.eval_expr(m.group(1).strip())),
+                            raw_tl,
+                        )
+                    text_lines.append(raw_tl)
+                    i += 1
+                merged_text = "\n".join(text_lines)
+                if is_additive:
+                    prev = str(self.current_vars().get(var_name.lower(), "") or "")
+                    merged_text = prev + merged_text
+                self.set_var(var_name, merged_text)
+                if not is_noshow:
+                    self.emit(merged_text)
+                i += 1
                 continue
 
             # Ejecutar sentencia individual
@@ -1324,6 +1376,136 @@ class FoxInterpreter:
             ff_out = m_mig.group(2).strip("\"'")
             migrate_scx_to_foxform(scx_in, ff_out)
             self.emit(f"[vfp2modern] Migrado '{scx_in}' -> '{ff_out}'")
+            return
+
+        # 16h. SCATTER NAME <obj_var> [BLANK]
+        m_scatter = re.match(
+            r"^SCATTER\s+NAME\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(BLANK))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_scatter:
+            cur = self._require_cursor("SCATTER")
+            obj_var = m_scatter.group(1)
+            is_blank = bool(m_scatter.group(2))
+            props: Dict[str, Any] = {}
+            for f in cur.fields:
+                props[f.name] = f.default_value() if is_blank else cur.get_field(f.name)
+            scatter_obj = VFPObject("ScatterRecord", props, {}, self)
+            self.set_var(obj_var, scatter_obj)
+            return
+
+        # 16i. GATHER NAME <obj_var>
+        m_gather = re.match(
+            r"^GATHER\s+NAME\s+([A-Za-z_][A-Za-z0-9_]*)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_gather:
+            cur = self._require_cursor("GATHER")
+            obj_var = m_gather.group(1)
+            src_obj = self.eval_expr(obj_var)
+            if isinstance(src_obj, VFPObject):
+                for f in cur.fields:
+                    if f.name in src_obj._props:
+                        cur.set_field(f.name, src_obj._props[f.name])
+            elif isinstance(src_obj, dict):
+                for f in cur.fields:
+                    if f.name in src_obj:
+                        cur.set_field(f.name, src_obj[f.name])
+            else:
+                raise TypeError(f"GATHER NAME requiere un objeto válido en '{obj_var}'.")
+            return
+
+        # 16j. CALCULATE <agg_list> [FOR <cond>] TO <var_list>
+        m_calc = re.match(
+            r"^CALCULATE\s+(.+?)(?:\s+FOR\s+(.+?))?\s+TO\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_calc:
+            cur = self._require_cursor("CALCULATE")
+            agg_specs = self._split_top_level(m_calc.group(1).strip(), ",")
+            for_expr = m_calc.group(2).strip() if m_calc.group(2) else None
+            target_vars = [v.strip() for v in self._split_top_level(m_calc.group(3).strip(), ",")]
+
+            parsed_aggs: List[Tuple[str, Optional[str]]] = []
+            for spec in agg_specs:
+                m_fn = re.match(r"^(SUM|AVG|COUNT|MIN|MAX|CNT)\s*\((.*)\)\s*$", spec.strip(), flags=re.IGNORECASE)
+                if not m_fn:
+                    raise SyntaxError(f"Expresión de agregación inválida en CALCULATE: '{spec}'")
+                op = m_fn.group(1).upper()
+                if op == "CNT":
+                    op = "COUNT"
+                inner = m_fn.group(2).strip() or None
+                parsed_aggs.append((op, inner))
+
+            buckets: List[List[Any]] = [[] for _ in parsed_aggs]
+            saved_area = self.wam.current_area
+            self.wam.select_area(cur.alias)
+            try:
+                for r in cur.visible_recnos(self.wam.set_deleted):
+                    cur.goto(r)
+                    if for_expr and not bool(self.eval_expr(for_expr)):
+                        continue
+                    for idx, (op, inner) in enumerate(parsed_aggs):
+                        if op == "COUNT" and not inner:
+                            buckets[idx].append(1)
+                        else:
+                            val = self.eval_expr(inner or "1")
+                            if val is not None:
+                                buckets[idx].append(val)
+            finally:
+                self.wam.current_area = saved_area
+
+            for idx, (op, _) in enumerate(parsed_aggs):
+                if idx >= len(target_vars):
+                    break
+                vals = buckets[idx]
+                if op == "COUNT":
+                    res = len(vals)
+                elif not vals:
+                    res = 0
+                elif op == "SUM":
+                    res = sum(vals)
+                elif op == "AVG":
+                    res = sum(vals) / len(vals)
+                elif op == "MIN":
+                    res = min(vals)
+                elif op == "MAX":
+                    res = max(vals)
+                else:
+                    res = 0
+                self.set_var(target_vars[idx], res)
+            return
+
+        # 16k. Transacciones: BEGIN TRANSACTION, END TRANSACTION, ROLLBACK
+        if re.match(r"^BEGIN\s+TRANSACTION\b", line, flags=re.IGNORECASE):
+            self.wam.begin_transaction()
+            return
+
+        if re.match(r"^END\s+TRANSACTION\b", line, flags=re.IGNORECASE):
+            self.wam.end_transaction()
+            return
+
+        if re.match(r"^ROLLBACK\b", line, flags=re.IGNORECASE):
+            self.wam.rollback()
+            return
+
+        # 16l. BUILD APP <salida.foxapp> FROM <proyecto.foxproj>
+        m_build = re.match(
+            r"^BUILD\s+APP\s+([^\s]+)\s+FROM\s+([^\s]+)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_build:
+            from .project import FoxProject
+
+            app_out = m_build.group(1).strip("\"'")
+            proj_in = m_build.group(2).strip("\"'")
+            proj = FoxProject.from_file(proj_in)
+            built_path = proj.build_app(app_out)
+            self.emit(f"[FoxProject] Aplicación empaquetada en '{built_path}'")
             return
 
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]

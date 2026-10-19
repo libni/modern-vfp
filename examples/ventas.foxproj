@@ -1,0 +1,16 @@
+{
+  "project": {
+    "name": "SistemaVentasFoxNext",
+    "version": "0.4.0",
+    "main": "demo_ventas.prg",
+    "programs": [
+      "demo_ventas.prg"
+    ],
+    "forms": [
+      "clientes.foxform"
+    ],
+    "reports": [
+      "ventas.foxreport"
+    ]
+  }
+}

@@ -538,6 +538,120 @@ WHERE total_ventas >= <<lnLimite>>
         self.assertEqual(status, 200)
         self.assertEqual(rpc_resp["result"], 42)
 
+    def test_oop_inheritance_dodefault_and_reflection(self) -> None:
+        self.interp.execute(
+            """
+            DEFINE CLASS EmpleadoBase AS Custom
+                SalarioBase = 1000
+                Departamento = "General"
+
+                FUNCTION CalcularBono(tnFactor)
+                    RETURN THIS.SalarioBase * tnFactor
+                ENDFUNC
+            ENDDEFINE
+
+            DEFINE CLASS Gerente AS EmpleadoBase
+                BonoGerencial = 500
+
+                FUNCTION CalcularBono(tnFactor)
+                    lnBase = DODEFAULT(tnFactor)
+                    RETURN lnBase + THIS.BonoGerencial
+                ENDFUNC
+            ENDDEFINE
+
+            loGerente = CREATEOBJECT("Gerente")
+            lnTotalBono = loGerente.CalcularBono(2)
+            =ADDPROPERTY(loGerente, "CodigoEjecutivo", "EXEC-99")
+            llTieneMetodo = PEMSTATUS(loGerente, "CalcularBono", 5)
+            llTieneProp = PEMSTATUS(loGerente, "CodigoEjecutivo", 5)
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnTotalBono"), 2500)
+        self.assertEqual(self.interp.eval_expr("loGerente.Departamento"), "General")
+        self.assertEqual(self.interp.eval_expr("loGerente.CodigoEjecutivo"), "EXEC-99")
+        self.assertTrue(self.interp.eval_expr("llTieneMetodo"))
+        self.assertTrue(self.interp.eval_expr("llTieneProp"))
+
+    def test_bindevent_raiseevent_and_unbindevents(self) -> None:
+        self.interp.execute(
+            """
+            DEFINE CLASS EmisorPedido AS Custom
+                UltimoTotal = 0
+                FUNCTION AlConfirmar(tnMonto)
+                    THIS.UltimoTotal = tnMonto
+                ENDFUNC
+            ENDDEFINE
+
+            DEFINE CLASS AuditorEventos AS Custom
+                EventosRecibidos = 0
+                MontoAuditado = 0
+                FUNCTION RegistrarAuditoria(tnMonto)
+                    THIS.EventosRecibidos = THIS.EventosRecibidos + 1
+                    THIS.MontoAuditado = tnMonto
+                ENDFUNC
+            ENDDEFINE
+
+            loEmisor = CREATEOBJECT("EmisorPedido")
+            loAuditor = CREATEOBJECT("AuditorEventos")
+
+            =BINDEVENT(loEmisor, "AlConfirmar", loAuditor, "RegistrarAuditoria")
+            =RAISEEVENT(loEmisor, "AlConfirmar", 750)
+
+            lnAntesUnbind = loAuditor.EventosRecibidos
+            =UNBINDEVENTS(loEmisor)
+            =RAISEEVENT(loEmisor, "AlConfirmar", 999)
+            lnDespuesUnbind = loAuditor.EventosRecibidos
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("loEmisor.UltimoTotal"), 999)
+        self.assertEqual(self.interp.eval_expr("loAuditor.MontoAuditado"), 750)
+        self.assertEqual(self.interp.eval_expr("lnAntesUnbind"), 1)
+        self.assertEqual(self.interp.eval_expr("lnDespuesUnbind"), 1)
+
+    def test_debugger_breakpoints_watchpoints_and_assert(self) -> None:
+        from modern_vfp.debugger import FoxDebugger
+
+        dbg = FoxDebugger(self.interp)
+        dbg.add_breakpoint(2)
+        dbg.add_watch("lnContador")
+
+        res = dbg.run_with_trace(
+            """
+            lnContador = 10
+            lnContador = 25
+            SET STEP ON
+            lnContador = 50
+            """
+        )
+        self.assertEqual(len(res["breakpointHits"]), 2)
+        self.assertGreaterEqual(len(res["watchHits"]), 2)
+        self.assertEqual(self.interp.eval_expr("lnContador"), 50)
+
+        # Verificar ASSERT cuando SET ASSERTS ON está activo
+        self.interp.execute("SET ASSERTS ON")
+        self.interp.execute("ASSERT 2 + 2 == 4 MESSAGE 'Matemática válida'")
+        with self.assertRaises(AssertionError):
+            self.interp.execute("ASSERT 1 == 2 MESSAGE 'Fallo de aserción esperado'")
+
+    def test_prg_to_python_transpiler(self) -> None:
+        from modern_vfp.transpiler import transpile_prg_to_python
+
+        prg_code = """
+        CREATE CURSOR items_py (id I, valor I)
+        INSERT INTO items_py VALUES (1, 40)
+        INSERT INTO items_py VALUES (2, 60)
+        CALCULATE SUM(valor) TO lnSumaPy
+        """
+        py_source = transpile_prg_to_python(prg_code)
+        self.assertIn("def run_fox_program", py_source)
+        self.assertIn("FoxInterpreter", py_source)
+
+        namespace: dict = {}
+        exec(py_source, namespace)
+        fox_instance = namespace["run_fox_program"]()
+        self.assertEqual(fox_instance.eval_expr("lnSumaPy"), 100)
+
 
 if __name__ == "__main__":
     unittest.main()
+

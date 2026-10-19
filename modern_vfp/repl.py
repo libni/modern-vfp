@@ -224,6 +224,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         start_api_server(interp, port=port)
         return 0
 
+    if args[0] == "--transpile" and len(args) >= 2:
+        from .transpiler import transpile_file
+
+        out_py = args[2] if len(args) >= 3 else None
+        dest = transpile_file(args[1], out_py)
+        print(f"[FoxTranspiler] Transpilado exitosamente: {args[1]} -> {dest}")
+        return 0
+
+    if args[0] == "--debug" and len(args) >= 2:
+        from .debugger import FoxDebugger
+
+        dbg = FoxDebugger(interp)
+        src = Path(args[1]).read_text(encoding="utf-8")
+        res = dbg.run_with_trace(
+            src,
+            on_breakpoint=lambda bp: print(
+                f"  [BREAKPOINT] Línea {bp['lineNo']}: {bp['statement']} | Alias={bp['activeAlias']} Rec={bp['recno']}"
+            ),
+        )
+        print(
+            f"[FoxDebugger] Ejecución completada ({res['stepsExecuted']} pasos, "
+            f"{len(res['breakpointHits'])} breakpoints alcanzados)."
+        )
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)

@@ -1,10 +1,10 @@
-# FoxNext (`modern-vfp`) v0.5.0
+# FoxNext (`modern-vfp`) v0.6.0
 
-> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, evolución dinámica de esquemas (`ALTER TABLE`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `Collection`), bloques `TEXT ... ENDTEXT`, conversión `CURSORTOJSON / JSONTOCURSOR`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos (`DEFINE CLASS`), formularios declarativos (`.foxform`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`) y entorno visual **FoxNext Studio**.
+> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, evolución dinámica de esquemas (`ALTER TABLE`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `Collection`), bloques `TEXT ... ENDTEXT`, conversión `CURSORTOJSON / JSONTOCURSOR`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`) y entorno visual **FoxNext Studio**.
 
 ---
 
-## Características Implementadas (v0.5.0)
+## Características Implementadas (v0.6.0)
 
 1. **Áreas de Trabajo (Work Areas 1..32767) y Cursores 64-bit (`modern_vfp/cursor.py`):**
    - `CREATE CURSOR` / `CREATE TABLE`, `ALTER TABLE <alias> ADD / DROP COLUMN`, `SELECT <alias|area>`, `USE`, `CLOSE TABLES`.
@@ -19,14 +19,16 @@
    - Modificación SQL directa sobre cursores: `UPDATE <alias> SET <campo> = <expr> WHERE <cond>` y `DELETE FROM <alias> WHERE <cond>`.
    - Conectividad SQL Pass-Through: `SQLCONNECT()`, `SQLSTRINGCONNECT()`, `SQLEXEC(nHandle, cSQL, cCursor)` (con parámetros `?variable`) y `SQLDISCONNECT()`.
    - Conversión directa Cursor $\leftrightarrow$ JSON y REST: `CURSORTOJSON([alias])`, `JSONTOCURSOR(lcJson, alias)`, `HTTPGET(url)`, `HTTPPOST(url, body)`.
-3. **Lenguaje xBase, Arreglos, Colecciones, `TEXT...ENDTEXT`, OOP y +65 Funciones (`modern_vfp/interpreter.py`, `modern_vfp/functions.py`):**
+3. **Lenguaje xBase, OOP Avanzado con Herencia y Eventos, Arreglos, Colecciones y +65 Funciones (`modern_vfp/interpreter.py`, `modern_vfp/functions.py`):**
+   - Clases orientadas a objetos con herencia multinivel (`DEFINE CLASS Sub AS Super`), invocación a superclase con `DODEFAULT(...)`, reflexión con `ADDPROPERTY()` / `PEMSTATUS()`, y delegación reactiva de eventos con `BINDEVENT()`, `RAISEEVENT()` y `UNBINDEVENTS()`.
    - Arreglos 1-based (`DIMENSION` / `DECLARE`, `ALEN()`, `ASCAN()`, `ASORT()`) y clase nativa `CREATEOBJECT("Collection")`.
    - Funciones de palabras y extracción: `STREXTRACT()`, `GETWORDCOUNT()`, `GETWORDNUM()`.
-   - Bloques `TEXT TO <lcVar> [ADDITIVE] [TEXTMERGE] [NOSHOW] ... ENDTEXT` con interpolación `<<expresion>>`.
-   - Clases orientadas a objetos con `DEFINE CLASS ... AS ... ENDDEFINE`, `CREATEOBJECT()` y sustitución de macros `&lcVar`.
+   - Bloques `TEXT TO <lcVar> [ADDITIVE] [TEXTMERGE] [NOSHOW] ... ENDTEXT` con interpolación `<<expresion>>`, `ASSERT <cond> [MESSAGE <msg>]` y sustitución de macros `&lcVar`.
 4. **Formularios RAD (`.foxform`) y Motor de Reportes por Bandas (`.foxreport`):**
    - `DO FORM <archivo.foxform> [TO FILE <salida.html>]` y `REPORT FORM <archivo.foxreport> [FOR <cond>] [TO FILE <salida.txt | .html>]`.
-5. **Tooling Moderno: LSP (`modern_vfp/lsp.py`), Microservicios REST (`modern_vfp/apiserver.py`), Migrador VFP 9 y Empaquetador:**
+5. **Tooling Moderno: Depurador (`modern_vfp/debugger.py`), Transpilador Python (`modern_vfp/transpiler.py`), LSP (`modern_vfp/lsp.py`), Microservicios REST (`modern_vfp/apiserver.py`), Migrador VFP 9 y Empaquetador:**
+   - Depurador paso a paso con Breakpoints, Watchpoints y `SET STEP ON` (`--debug <archivo.prg>`).
+   - Transpilador de programas `.prg` a módulos Python 3 nativos (`.py`) (`--transpile <archivo.prg> [salida.py]`).
    - Analizador estático y autocompletado inteligente (`--check <archivo.prg>`).
    - Servidor de microservicios REST JSON (`--api <archivo.prg> [puerto]`) que expone cursores (`/api/cursors/<alias>`) y procedimientos (`/api/rpc/<func>`).
    - Migrador `MIGRATE SCX <archivo.scx> TO <salida.foxform>` y empaquetador `BUILD APP <salida.foxapp> FROM <proyecto.foxproj>`.
@@ -42,13 +44,17 @@ python3 -m modern_vfp
 # 2. Iniciar el Entorno Visual FoxNext Studio (http://127.0.0.1:8765)
 python3 -m modern_vfp --studio
 
-# 3. Analizar estáticamente un programa con el motor LSP
+# 3. Analizar estáticamente o depurar un programa .prg
 python3 -m modern_vfp --check examples/demo_ventas.prg
+python3 -m modern_vfp --debug examples/demo_ventas.prg
 
-# 4. Publicar un programa .prg y sus cursores como Microservicio REST JSON
+# 4. Transpilar un programa .prg a Python 3 nativo (.py)
+python3 -m modern_vfp --transpile examples/demo_ventas.prg
+
+# 5. Publicar un programa .prg y sus cursores como Microservicio REST JSON
 python3 -m modern_vfp --api examples/demo_ventas.prg 8766
 
-# 5. Ejecutar las 22 suites de pruebas integrales
+# 6. Ejecutar las 26 suites de pruebas integrales
 python3 -m unittest discover -s tests -v
 ```
 

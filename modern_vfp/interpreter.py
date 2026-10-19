@@ -32,34 +32,66 @@ class _ReturnSignal(Exception):
 class VFPObject:
     """
     Instancia de una clase definida con DEFINE CLASS o CREATEOBJECT("Empty").
+    Soporta herencia multinivel (DODEFAULT), introspección (PEMSTATUS / ADDPROPERTY)
+    y enlace dinámico de eventos (BINDEVENT / RAISEEVENT).
     """
 
-    def __init__(self, class_name: str, properties: Dict[str, Any], methods: Dict[str, Tuple[List[str], List[str]]], interpreter: "FoxInterpreter"):
+    def __init__(
+        self,
+        class_name: str,
+        properties: Dict[str, Any],
+        methods: Dict[str, Tuple[List[str], List[str]]],
+        interpreter: "FoxInterpreter",
+        parent_class: str = "Custom",
+        parent_methods: Optional[Dict[str, Tuple[List[str], List[str]]]] = None,
+    ):
         self.__vfp_class__ = class_name
+        self._parent_class = parent_class
         self._props: Dict[str, Any] = {k.lower(): v for k, v in properties.items()}
         self._methods = methods
+        self._parent_methods = parent_methods or {}
+        self._bound_events: Dict[str, List[Tuple["VFPObject", str]]] = {}
         self._interp = interpreter
 
     def get_prop(self, name: str) -> Any:
         nl = name.lower()
         if nl == "class":
             return self.__vfp_class__
+        if nl == "parentclass":
+            return self._parent_class
         return self._props.get(nl)
 
     def set_prop(self, name: str, value: Any) -> None:
         self._props[name.lower()] = value
+
+    def has_member(self, name: str) -> bool:
+        nl = name.lower()
+        return nl in self._props or nl in self._methods or nl in ("class", "parentclass")
 
     def call_method(self, name: str, *args: Any) -> Any:
         nl = name.lower()
         if nl not in self._methods:
             raise AttributeError(f"El método '{name}' no existe en la clase '{self.__vfp_class__}'")
         params, body = self._methods[nl]
-        return self._interp._invoke_Routine(params, body, list(args), this_obj=self)
+        self._interp._method_stack.append((self, nl))
+        try:
+            res = self._interp._invoke_Routine(params, body, list(args), this_obj=self)
+        finally:
+            self._interp._method_stack.pop()
+
+        # Disparar delegados registrados con BINDEVENT
+        for delegate_obj, delegate_method in list(self._bound_events.get(nl, [])):
+            delegate_obj.call_method(delegate_method, *args)
+        return res
 
     def __getattr__(self, item: str) -> Any:
         if item.startswith("_"):
             raise AttributeError(item)
         nl = item.lower()
+        if nl == "class":
+            return self.__vfp_class__
+        if nl == "parentclass":
+            return self._parent_class
         if nl in self._methods:
             return lambda *a: self.call_method(nl, *a)
         if nl in self._props:
@@ -236,10 +268,18 @@ class FoxInterpreter:
         self.functions["createobject"] = self.create_object
         self.functions["evaluate"] = self.eval_expr
         self.functions["sqlexec"] = self.sql_exec
+        self.functions["dodefault"] = self.do_default
+        self.functions["addproperty"] = self.add_property
+        self.functions["pemstatus"] = self.pem_status
+        self.functions["bindevent"] = self.bind_event
+        self.functions["unbindevents"] = self.unbind_events
+        self.functions["raiseevent"] = self.raise_event
 
         self.global_vars: Dict[str, Any] = {}
         self.call_stack: List[Dict[str, Any]] = []
         self._this_stack: List[VFPObject] = []
+        self._method_stack: List[Tuple[VFPObject, str]] = []
+        self.asserts_enabled: bool = True
 
         # Procedimientos / Funciones definidas por el usuario: name -> (params, body_lines)
         self.procedures: Dict[str, Tuple[List[str], List[str]]] = {}
@@ -251,6 +291,65 @@ class FoxInterpreter:
 
     def sql_exec(self, handle: int, sql_stmt: str, cursor_name: str = "sqlresult") -> int:
         return self.wam.sql_exec(handle, sql_stmt, cursor_name, self.current_vars())
+
+    def do_default(self, *args: Any) -> Any:
+        if not self._method_stack:
+            return True
+        obj, method_name = self._method_stack[-1]
+        if method_name in obj._parent_methods:
+            params, body = obj._parent_methods[method_name]
+            return self._invoke_Routine(params, body, list(args), this_obj=obj)
+        return True
+
+    @staticmethod
+    def add_property(obj: Any, prop_name: str, initial_val: Any = False) -> bool:
+        if isinstance(obj, VFPObject):
+            obj.set_prop(prop_name, initial_val)
+            return True
+        return False
+
+    @staticmethod
+    def pem_status(obj: Any, member_name: str, attribute: int = 5) -> Any:
+        if not isinstance(obj, VFPObject):
+            return False
+        attr = int(attribute)
+        ml = member_name.strip().lower()
+        if attr == 5:
+            return obj.has_member(ml)
+        if attr == 3:
+            return "Method" if ml in obj._methods else "Property"
+        return obj.has_member(ml)
+
+    @staticmethod
+    def bind_event(src_obj: Any, event_name: str, delegate_obj: Any, delegate_method: str, flags: int = 0) -> int:
+        if not isinstance(src_obj, VFPObject) or not isinstance(delegate_obj, VFPObject):
+            raise TypeError("BINDEVENT requiere instancias de objetos VFPObject válidos.")
+        ev = event_name.strip().lower()
+        dm = delegate_method.strip().lower()
+        src_obj._bound_events.setdefault(ev, []).append((delegate_obj, dm))
+        return 1
+
+    @staticmethod
+    def unbind_events(src_obj: Any, event_name: Optional[str] = None) -> int:
+        if not isinstance(src_obj, VFPObject):
+            return 0
+        if event_name:
+            removed = len(src_obj._bound_events.pop(event_name.strip().lower(), []))
+            return removed
+        total = sum(len(v) for v in src_obj._bound_events.values())
+        src_obj._bound_events.clear()
+        return total
+
+    @staticmethod
+    def raise_event(src_obj: Any, event_name: str, *args: Any) -> Any:
+        if not isinstance(src_obj, VFPObject):
+            raise TypeError("RAISEEVENT requiere una instancia de VFPObject.")
+        ev = event_name.strip().lower()
+        if ev in src_obj._methods:
+            return src_obj.call_method(ev, *args)
+        for delegate_obj, delegate_method in list(src_obj._bound_events.get(ev, [])):
+            delegate_obj.call_method(delegate_method, *args)
+        return True
 
     def emit(self, text: str, newline: bool = True) -> None:
         if self._output_cb:
@@ -312,15 +411,43 @@ class FoxInterpreter:
             return VFPCollection()
         if cl not in self.classes:
             raise ValueError(f"La clase '{class_name}' no está definida.")
-        parent, prop_lines, methods = self.classes[cl]
-        obj = VFPObject(class_name, {}, methods, self)
+
+        # Resolver cadena de herencia desde la clase base hasta la subclase
+        chain: List[str] = []
+        curr: Optional[str] = cl
+        while curr and curr in self.classes:
+            chain.append(curr)
+            parent_n = self.classes[curr][0].lower()
+            curr = parent_n if parent_n in self.classes and parent_n not in chain else None
+        chain.reverse()
+
+        merged_prop_lines: List[str] = []
+        merged_methods: Dict[str, Tuple[List[str], List[str]]] = {}
+        parent_methods: Dict[str, Tuple[List[str], List[str]]] = {}
+
+        for idx, c_key in enumerate(chain):
+            _, p_lines, c_methods = self.classes[c_key]
+            merged_prop_lines.extend(p_lines)
+            if idx < len(chain) - 1:
+                parent_methods.update(c_methods)
+            merged_methods.update(c_methods)
+
+        immediate_parent = self.classes[cl][0]
+        obj = VFPObject(
+            class_name,
+            {},
+            merged_methods,
+            self,
+            parent_class=immediate_parent,
+            parent_methods=parent_methods,
+        )
         self._this_stack.append(obj)
         try:
-            for pline in prop_lines:
+            for pline in merged_prop_lines:
                 if "=" in pline:
                     k, v_expr = pline.split("=", 1)
                     obj.set_prop(k.strip(), self.eval_expr(v_expr.strip()))
-            if "init" in methods:
+            if "init" in merged_methods:
                 obj.call_method("init", *args)
         finally:
             self._this_stack.pop()
@@ -1644,6 +1771,19 @@ class FoxInterpreter:
             if cur is None:
                 raise RuntimeError(f"El cursor '{m_alt_drop.group(1)}' no existe para ALTER TABLE.")
             cur.alter_drop_column(m_alt_drop.group(2))
+            return
+
+        # 16q. SET ASSERTS ON|OFF y ASSERT <cond> [MESSAGE <msg>]
+        m_set_ass = re.match(r"^SET\s+ASSERTS?\s+(ON|OFF)\s*$", line, flags=re.IGNORECASE)
+        if m_set_ass:
+            self.asserts_enabled = m_set_ass.group(1).upper() == "ON"
+            return
+
+        m_assert = re.match(r"^ASSERT\s+(.+?)(?:\s+MESSAGE\s+(.+))?\s*$", line, flags=re.IGNORECASE)
+        if m_assert:
+            if self.asserts_enabled and not bool(self.eval_expr(m_assert.group(1).strip())):
+                msg = str(self.eval_expr(m_assert.group(2).strip())) if m_assert.group(2) else f"Fallo en ASSERT: {m_assert.group(1)}"
+                raise AssertionError(msg)
             return
 
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]

@@ -249,6 +249,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
 
+    if args[0] == "--doc" and len(args) >= 2:
+        from .docgen import generate_file_docs
+
+        out_md = args[2] if len(args) >= 3 else None
+        dest = generate_file_docs(args[1], out_md)
+        print(f"[FoxDocGen] Documentación Markdown generada en: {dest}")
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)
@@ -264,6 +272,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if ext == ".foxreport":
         report = FoxReport.from_file(target_path, interpreter=interp)
         print(report.render_text())
+        return 0
+
+    if ext == ".foxmenu":
+        from .foxmenu import FoxMenu
+
+        menu = FoxMenu.from_file(target_path, interpreter=interp)
+        print(menu.render_tui())
         return 0
 
     if ext == ".foxapp":

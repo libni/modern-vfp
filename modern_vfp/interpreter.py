@@ -274,12 +274,16 @@ class FoxInterpreter:
         self.functions["bindevent"] = self.bind_event
         self.functions["unbindevents"] = self.unbind_events
         self.functions["raiseevent"] = self.raise_event
+        self.functions["requery"] = self.requery
+        self.functions["adir"] = self.adir
+        self.functions["__vfp_idx__"] = self._vfp_array_index
 
         self.global_vars: Dict[str, Any] = {}
         self.call_stack: List[Dict[str, Any]] = []
         self._this_stack: List[VFPObject] = []
         self._method_stack: List[Tuple[VFPObject, str]] = []
         self.asserts_enabled: bool = True
+        self.menus: Dict[str, Any] = {}
 
         # Procedimientos / Funciones definidas por el usuario: name -> (params, body_lines)
         self.procedures: Dict[str, Tuple[List[str], List[str]]] = {}
@@ -291,6 +295,46 @@ class FoxInterpreter:
 
     def sql_exec(self, handle: int, sql_stmt: str, cursor_name: str = "sqlresult") -> int:
         return self.wam.sql_exec(handle, sql_stmt, cursor_name, self.current_vars())
+
+    def requery(self, alias_or_area: Any = None) -> int:
+        return self.wam.requery_view(alias_or_area, self.current_vars())
+
+    def adir(self, array_name_or_ref: Any, skeleton: str = "*") -> int:
+        p_skel = Path(str(skeleton or "*"))
+        base_dir = p_skel.parent if str(p_skel.parent) != "." else Path(".")
+        pattern = p_skel.name or "*"
+        matches = sorted(base_dir.glob(pattern), key=lambda p: p.name.lower())
+        rows: List[List[Any]] = []
+        for item in matches:
+            try:
+                st = item.stat()
+                dt = datetime.datetime.fromtimestamp(st.st_mtime)
+                attr = "D" if item.is_dir() else "A"
+                rows.append([
+                    item.name,
+                    int(st.st_size),
+                    dt.date(),
+                    dt.strftime("%H:%M:%S"),
+                    attr,
+                ])
+            except OSError:
+                continue
+        if isinstance(array_name_or_ref, str):
+            self.set_var(array_name_or_ref, rows)
+        elif isinstance(array_name_or_ref, list):
+            array_name_or_ref.clear()
+            array_name_or_ref.extend(rows)
+        return len(rows)
+
+    @staticmethod
+    def _vfp_array_index(arr: Any, idx1: Any, idx2: Any = None) -> Any:
+        if isinstance(arr, list):
+            i1 = int(idx1) - 1
+            if idx2 is not None:
+                i2 = int(idx2) - 1
+                return arr[i1][i2]
+            return arr[i1]
+        return arr[idx1]
 
     def do_default(self, *args: Any) -> Any:
         if not self._method_stack:
@@ -535,6 +579,25 @@ class FoxInterpreter:
 
         # Operador $ (subcadena contenida en cadena: "a" $ "abc" -> ("a" in "abc"))
         s = re.sub(r"\$", " in ", s)
+
+        # Auto-entrecomillar nombre de arreglo en ADIR(laArr, ...)
+        s = re.sub(
+            r"\bADIR\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*([,)])",
+            lambda m: f'ADIR("{m.group(1)}"{m.group(2)}',
+            s,
+            flags=re.IGNORECASE,
+        )
+
+        # Traducir acceso a elementos de arreglo 1-based `laArr[i]` o `laArr[r, c]` a `__vfp_idx__(laArr, i, c)`
+        s = re.sub(
+            r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\[\s*([^\],]+?)(?:\s*,\s*([^\]]+?))?\s*\]",
+            lambda m: (
+                f"__vfp_idx__({m.group(1)}, {m.group(2)}, {m.group(3)})"
+                if m.group(3)
+                else f"__vfp_idx__({m.group(1)}, {m.group(2)})"
+            ),
+            s,
+        )
 
         # Restaurar literales de cadena
         for idx, lit in enumerate(strings):
@@ -1784,6 +1847,120 @@ class FoxInterpreter:
             if self.asserts_enabled and not bool(self.eval_expr(m_assert.group(1).strip())):
                 msg = str(self.eval_expr(m_assert.group(2).strip())) if m_assert.group(2) else f"Fallo en ASSERT: {m_assert.group(1)}"
                 raise AssertionError(msg)
+            return
+
+        # 16r. Vistas SQL Parametrizadas: CREATE SQL VIEW <vista> AS SELECT ...
+        m_view = re.match(
+            r"^CREATE\s+SQL\s+VIEW\s+([A-Za-z_][A-Za-z0-9_]*)\s+AS\s+(SELECT\s+.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_view:
+            self.wam.create_sql_view(m_view.group(1), m_view.group(2).strip(), self.current_vars())
+            return
+
+        # 16s. Comandos de Menús: DEFINE MENU, DEFINE PAD, ON PAD, DEFINE POPUP, DEFINE BAR, ON SELECTION BAR, ACTIVATE POPUP
+        m_def_menu = re.match(r"^DEFINE\s+MENU\s+([A-Za-z_][A-Za-z0-9_]*)\b", line, flags=re.IGNORECASE)
+        if m_def_menu:
+            from .foxmenu import FoxMenu
+
+            mname = m_def_menu.group(1).lower()
+            self.menus[mname] = FoxMenu(name=mname, interpreter=self)
+            return
+
+        m_def_pad = re.match(
+            r"^DEFINE\s+PAD\s+([A-Za-z_][A-Za-z0-9_]*)\s+OF\s+([A-Za-z_][A-Za-z0-9_]*)\s+PROMPT\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_def_pad:
+            from .foxmenu import FoxMenu
+
+            pad_name = m_def_pad.group(1).lower()
+            menu_name = m_def_pad.group(2).lower()
+            prompt_val = str(self.eval_expr(m_def_pad.group(3).strip()))
+            menu_obj = self.menus.setdefault(menu_name, FoxMenu(name=menu_name, interpreter=self))
+            menu_obj.define_pad(pad_name, prompt_val)
+            return
+
+        m_on_pad = re.match(
+            r"^ON\s+PAD\s+([A-Za-z_][A-Za-z0-9_]*)\s+OF\s+([A-Za-z_][A-Za-z0-9_]*)\s+ACTIVATE\s+POPUP\s+([A-Za-z_][A-Za-z0-9_]*)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_on_pad:
+            from .foxmenu import FoxMenu
+
+            pad_name = m_on_pad.group(1).lower()
+            menu_name = m_on_pad.group(2).lower()
+            popup_name = m_on_pad.group(3).lower()
+            menu_obj = self.menus.setdefault(menu_name, FoxMenu(name=menu_name, interpreter=self))
+            menu_obj.on_pad_activate_popup(pad_name, popup_name)
+            return
+
+        m_def_popup = re.match(r"^DEFINE\s+POPUP\s+([A-Za-z_][A-Za-z0-9_]*)\b", line, flags=re.IGNORECASE)
+        if m_def_popup:
+            from .foxmenu import FoxMenu
+
+            popup_name = m_def_popup.group(1).lower()
+            menu_obj = next(iter(self.menus.values()), None)
+            if menu_obj is None:
+                menu_obj = FoxMenu(name="_msysmenu", interpreter=self)
+                self.menus["_msysmenu"] = menu_obj
+            menu_obj.define_popup(popup_name)
+            return
+
+        m_def_bar = re.match(
+            r"^DEFINE\s+BAR\s+(\d+)\s+OF\s+([A-Za-z_][A-Za-z0-9_]*)\s+PROMPT\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_def_bar:
+            from .foxmenu import FoxMenu
+
+            bar_num = int(m_def_bar.group(1))
+            popup_name = m_def_bar.group(2).lower()
+            prompt_val = str(self.eval_expr(m_def_bar.group(3).strip()))
+            menu_obj = next(iter(self.menus.values()), None)
+            if menu_obj is None:
+                menu_obj = FoxMenu(name="_msysmenu", interpreter=self)
+                self.menus["_msysmenu"] = menu_obj
+            menu_obj.define_bar(popup_name, bar_num, prompt_val)
+            return
+
+        m_on_sel_bar = re.match(
+            r"^ON\s+SELECTION\s+BAR\s+(\d+)\s+OF\s+([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_on_sel_bar:
+            from .foxmenu import FoxMenu
+
+            bar_num = int(m_on_sel_bar.group(1))
+            popup_name = m_on_sel_bar.group(2).lower()
+            cmd_str = m_on_sel_bar.group(3).strip()
+            menu_obj = next(iter(self.menus.values()), None)
+            if menu_obj is None:
+                menu_obj = FoxMenu(name="_msysmenu", interpreter=self)
+                self.menus["_msysmenu"] = menu_obj
+            menu_obj.on_selection_bar(popup_name, bar_num, cmd_str)
+            return
+
+        m_act_popup = re.match(
+            r"^ACTIVATE\s+POPUP\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+BAR\s+(\d+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_act_popup:
+            popup_name = m_act_popup.group(1).lower()
+            bar_num_str = m_act_popup.group(2)
+            for menu_obj in self.menus.values():
+                if popup_name in menu_obj.popups:
+                    if bar_num_str:
+                        menu_obj.trigger_bar(popup_name, int(bar_num_str))
+                    else:
+                        self.emit(menu_obj.render_tui())
+                    break
             return
 
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]

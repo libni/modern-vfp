@@ -519,9 +519,12 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         end = text.find(e, start)
         return text[start:end] if end != -1 else ""
 
-    # --- Funciones de Archivos y JSON ---
+    # --- Funciones de Archivos, Rutas, Sistema y JSON ---
     def fn_file(filepath: Any) -> bool:
         return Path(str(filepath)).is_file()
+
+    def fn_directory(dirpath: Any) -> bool:
+        return Path(str(dirpath)).is_dir()
 
     def fn_filetostr(filepath: Any) -> str:
         return Path(str(filepath)).read_text(encoding="utf-8")
@@ -533,6 +536,60 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         with open(p, mode, encoding="utf-8") as fp:
             fp.write(text)
         return len(text.encode("utf-8"))
+
+    def fn_justfname(filepath: Any) -> str:
+        return Path(str(filepath)).name
+
+    def fn_justext(filepath: Any) -> str:
+        return Path(str(filepath)).suffix.lstrip(".")
+
+    def fn_justpath(filepath: Any) -> str:
+        parent = str(Path(str(filepath)).parent)
+        return "" if parent == "." else parent
+
+    def fn_juststem(filepath: Any) -> str:
+        return Path(str(filepath)).stem
+
+    def fn_addbs(dirpath: Any) -> str:
+        import os
+
+        s = str(dirpath or "")
+        if not s:
+            return ""
+        sep = "\\" if "\\" in s and "/" not in s else os.sep
+        return s if s.endswith(("/", "\\")) else s + sep
+
+    def fn_forceext(filepath: Any, new_ext: Any) -> str:
+        ext = str(new_ext or "").lstrip(".")
+        p = Path(str(filepath))
+        return str(p.with_suffix(f".{ext}" if ext else ""))
+
+    def fn_getenv(varname: Any) -> str:
+        import os
+
+        return os.environ.get(str(varname), "")
+
+    def fn_sys(func_num: int, *args: Any) -> Any:
+        import getpass
+        import os
+        import platform
+        import tempfile
+        import uuid
+
+        code = int(func_num)
+        if code == 0:
+            return f"{platform.node()} # {getpass.getuser()}"
+        if code == 5:
+            return Path.cwd().anchor or "/"
+        if code == 16:
+            return "FOXNEXT_MAIN.PRG"
+        if code == 2003:
+            return str(Path.cwd())
+        if code == 2015:
+            return "_" + uuid.uuid4().hex[:9].upper()
+        if code == 2023:
+            return tempfile.gettempdir()
+        return str(os.getpid())
 
     def fn_json_encode(obj: Any) -> str:
         return json.dumps(obj, ensure_ascii=False, default=str)
@@ -633,8 +690,17 @@ def build_vfp_functions(wam: WorkAreaManager) -> Dict[str, Callable[..., Any]]:
         "getwordnum": fn_getwordnum,
         "strextract": fn_strextract,
         "file": fn_file,
+        "directory": fn_directory,
         "filetostr": fn_filetostr,
         "strtofile": fn_strtofile,
+        "justfname": fn_justfname,
+        "justext": fn_justext,
+        "justpath": fn_justpath,
+        "juststem": fn_juststem,
+        "addbs": fn_addbs,
+        "forceext": fn_forceext,
+        "getenv": fn_getenv,
+        "sys": fn_sys,
         "jsonencode": fn_json_encode,
         "jsondecode": fn_json_decode,
         "messagebox": fn_messagebox,

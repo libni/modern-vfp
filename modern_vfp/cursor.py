@@ -583,6 +583,29 @@ class WorkAreaManager:
         self._sql_connections: Dict[int, sqlite3.Connection] = {}
         self._next_sql_handle: int = 1
         self._txn_stack: List[Dict[int, Tuple[List[Dict[str, Any]], List[bool], int, bool, bool]]] = []
+        self.sql_views: Dict[str, str] = {}
+
+    def create_sql_view(self, view_name: str, select_sql: str, variables: Dict[str, Any]) -> Cursor:
+        """
+        Registra una Vista SQL parametrizada (`CREATE SQL VIEW <name> AS SELECT ...`)
+        y abre/ejecuta inicialmente su cursor asociado.
+        """
+        vname = view_name.strip().lower()
+        self.sql_views[vname] = select_sql.strip()
+        return self.execute_sql_select(select_sql, vname, variables)
+
+    def requery_view(self, alias_or_area: Any, variables: Dict[str, Any]) -> int:
+        """
+        Refresca dinámicamente una Vista SQL (`REQUERY([alias])`) re-evaluando sus parámetros `?var`.
+        Devuelve 1 si se refrescó con éxito, 0 en caso contrario.
+        """
+        cur = self.get_cursor(alias_or_area) if alias_or_area is not None else self.current_cursor()
+        vname = cur.alias.lower() if cur else (str(alias_or_area).strip().lower() if alias_or_area else "")
+        if not vname or vname not in self.sql_views:
+            return 0
+        sql_def = self.sql_views[vname]
+        self.execute_sql_select(sql_def, vname, variables)
+        return 1
 
     def begin_transaction(self) -> int:
         snap: Dict[int, Tuple[List[Dict[str, Any]], List[bool], int, bool, bool]] = {}
@@ -923,8 +946,9 @@ class WorkAreaManager:
                 elif isinstance(v, (int, float, str)) or v is None:
                     params[k] = v
 
-            # Reemplazar prefijo m.variable por :variable y variables sueltas
-            processed_sql = re.sub(r"\bm\.([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: f":{m.group(1).lower()}", sql_query)
+            # Reemplazar prefijo ?variable o m.variable por :variable y variables sueltas
+            processed_sql = re.sub(r"\?([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: f":{m.group(1).lower()}", sql_query)
+            processed_sql = re.sub(r"\bm\.([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: f":{m.group(1).lower()}", processed_sql)
             for var_name in sorted(params.keys(), key=len, reverse=True):
                 # Evitar reemplazar nombres de tablas o columnas si coinciden con un cursor
                 if var_name in self.alias_to_area:

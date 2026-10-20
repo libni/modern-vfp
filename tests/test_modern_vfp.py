@@ -651,6 +651,102 @@ WHERE total_ventas >= <<lnLimite>>
         fox_instance = namespace["run_fox_program"]()
         self.assertEqual(fox_instance.eval_expr("lnSumaPy"), 100)
 
+    def test_sql_views_and_requery(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR empleados_v (id I, nombre C(30), depto C(20), salario I)
+            INSERT INTO empleados_v VALUES (1, "Ana", "IT", 3500)
+            INSERT INTO empleados_v VALUES (2, "Luis", "Ventas", 2800)
+            INSERT INTO empleados_v VALUES (3, "Marta", "IT", 4200)
+
+            vp_depto = "IT"
+            CREATE SQL VIEW v_por_depto AS SELECT * FROM empleados_v WHERE depto = ?vp_depto
+            lnCountIT = RECCOUNT("v_por_depto")
+
+            vp_depto = "Ventas"
+            =REQUERY("v_por_depto")
+            lnCountVentas = RECCOUNT("v_por_depto")
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnCountIT"), 2)
+        self.assertEqual(self.interp.eval_expr("lnCountVentas"), 1)
+        self.assertEqual(self.interp.eval_expr("v_por_depto.nombre"), "Luis")
+
+    def test_system_file_and_adir_functions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "reporte_anual.txt"
+            self.interp.set_var("lcRutaArchivo", str(sample_file))
+            self.interp.set_var("lcMascara", f"{tmpdir}/*.txt")
+            self.interp.execute(
+                """
+                =STRTOFILE("Linea 1 - FoxNext", lcRutaArchivo)
+                lcLeido = FILETOSTR(lcRutaArchivo)
+                lcNombre = JUSTFNAME(lcRutaArchivo)
+                lcStem = JUSTSTEM(lcRutaArchivo)
+                lcExt = JUSTEXT(lcRutaArchivo)
+                lcNuevaExt = FORCEEXT(lcRutaArchivo, "bak")
+                lcUnico = SYS(2015)
+                lnTotalArchivos = ADIR(laDirInfo, lcMascara)
+                lcPrimerArchivo = laDirInfo[1, 1]
+                """
+            )
+            self.assertEqual(self.interp.eval_expr("lcLeido"), "Linea 1 - FoxNext")
+            self.assertEqual(self.interp.eval_expr("lcNombre"), "reporte_anual.txt")
+            self.assertEqual(self.interp.eval_expr("lcStem"), "reporte_anual")
+            self.assertEqual(self.interp.eval_expr("lcExt"), "txt")
+            self.assertTrue(str(self.interp.eval_expr("lcNuevaExt")).endswith(".bak"))
+            self.assertTrue(str(self.interp.eval_expr("lcUnico")).startswith("_"))
+            self.assertEqual(self.interp.eval_expr("lnTotalArchivos"), 1)
+            self.assertEqual(self.interp.eval_expr("lcPrimerArchivo"), "reporte_anual.txt")
+
+    def test_foxmenu_and_xbase_menu_commands(self) -> None:
+        self.interp.execute(
+            """
+            lnAccionEjecutada = 0
+            DEFINE MENU mnuPrincipal
+            DEFINE PAD padArchivo OF mnuPrincipal PROMPT "Archivo"
+            ON PAD padArchivo OF mnuPrincipal ACTIVATE POPUP popArchivo
+            DEFINE POPUP popArchivo
+            DEFINE BAR 1 OF popArchivo PROMPT "Nuevo Documento"
+            DEFINE BAR 2 OF popArchivo PROMPT "Cerrar Sesión"
+            ON SELECTION BAR 1 OF popArchivo lnAccionEjecutada = 101
+            ON SELECTION BAR 2 OF popArchivo lnAccionEjecutada = 202
+
+            ACTIVATE POPUP popArchivo BAR 1
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnAccionEjecutada"), 101)
+        menu_obj = self.interp.menus["mnuprincipal"]
+        tui_str = menu_obj.render_tui()
+        html_str = menu_obj.render_html()
+        self.assertIn("Nuevo Documento", tui_str)
+        self.assertIn("foxmenu-bar", html_str)
+
+    def test_docgen_markdown_generation(self) -> None:
+        from modern_vfp.docgen import generate_prg_docs
+
+        sample_prg = """
+        CREATE CURSOR facturas (id I, cliente C(40), total Y)
+        CREATE SQL VIEW v_altas AS SELECT * FROM facturas WHERE total > 1000
+
+        DEFINE CLASS ServicioFacturacion AS Custom
+            Impuesto = 0.16
+            FUNCTION EmitirFactura(tnId, tcCliente)
+                RETURN .T.
+            ENDFUNC
+        ENDDEFINE
+
+        FUNCTION FormatearMoneda(tnMonto)
+            RETURN TRANSFORM(tnMonto)
+        ENDFUNC
+        """
+        md = generate_prg_docs(sample_prg, title="Manual de Facturación")
+        self.assertIn("# Manual de Facturación", md)
+        self.assertIn("Cursor `facturas`", md)
+        self.assertIn("`v_altas`", md)
+        self.assertIn("Clase `serviciofacturacion`", md)
+        self.assertIn("`formatearmoneda(tnmonto)`", md)
+
 
 if __name__ == "__main__":
     unittest.main()

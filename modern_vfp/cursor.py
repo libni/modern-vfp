@@ -704,6 +704,98 @@ class WorkAreaManager:
         self.open_cursor_in_current_or_new(cur, in_free_area=True)
         return cur.reccount()
 
+    def cursor_to_xml(self, alias_or_area: Any = None) -> str:
+        """
+        Convierte el cursor indicado al formato XML estándar de Visual FoxPro (<VFPData>).
+        """
+        import xml.etree.ElementTree as ET
+
+        cur = self.get_cursor(alias_or_area) if alias_or_area is not None else self.current_cursor()
+        if cur is None:
+            raise RuntimeError("CURSORTOXML requiere un cursor abierto.")
+        root = ET.Element("VFPData")
+        row_tag = cur.alias.lower() or "row"
+        for r in cur.visible_recnos(self.set_deleted):
+            raw_row = cur.records[r - 1]
+            row_el = ET.SubElement(root, row_tag)
+            for f in cur.fields:
+                col_el = ET.SubElement(row_el, f.name)
+                col_el.set("type", f.ftype)
+                v = raw_row.get(f.name)
+                if v is None:
+                    col_el.text = ""
+                elif isinstance(v, bool):
+                    col_el.text = "true" if v else "false"
+                elif isinstance(v, (datetime.date, datetime.datetime)):
+                    col_el.text = v.isoformat()
+                else:
+                    col_el.text = str(v)
+        return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+
+    def xml_to_cursor(self, xml_source: str, cursor_name: str = "xmlresult") -> int:
+        """
+        Parsea una cadena o archivo XML (<VFPData>) y crea un cursor de 64 bits en memoria.
+        Devuelve el número de registros cargados.
+        """
+        import xml.etree.ElementTree as ET
+        from pathlib import Path
+
+        raw = str(xml_source).strip()
+        if not raw.startswith("<") and Path(raw).is_file():
+            raw = Path(raw).read_text(encoding="utf-8")
+
+        root = ET.fromstring(raw)
+        row_elements = list(root)
+        col_order: List[str] = []
+        col_types: Dict[str, str] = {}
+        parsed_rows: List[Dict[str, Any]] = []
+
+        for row_el in row_elements:
+            row_dict: Dict[str, Any] = {}
+            for col_el in row_el:
+                cname = col_el.tag.lower()
+                ctype = (col_el.attrib.get("type") or "").upper()
+                text_val = (col_el.text or "").strip()
+                if cname not in col_order:
+                    col_order.append(cname)
+                if ctype and cname not in col_types:
+                    col_types[cname] = ctype
+
+                # Inferir o convertir valor según tipo
+                eff_type = col_types.get(cname, "")
+                if eff_type == "I" or (not eff_type and re.match(r"^-?\d+$", text_val)):
+                    col_types.setdefault(cname, "I")
+                    row_dict[cname] = int(text_val) if text_val else 0
+                elif eff_type in ("N", "F", "B", "Y") or (not eff_type and re.match(r"^-?\d+\.\d+$", text_val)):
+                    col_types.setdefault(cname, "N")
+                    row_dict[cname] = float(text_val) if text_val else 0.0
+                elif eff_type == "L" or text_val.lower() in ("true", "false", ".t.", ".f."):
+                    col_types.setdefault(cname, "L")
+                    row_dict[cname] = text_val.lower() in ("true", ".t.", "1")
+                else:
+                    col_types.setdefault(cname, "V")
+                    row_dict[cname] = text_val
+            parsed_rows.append(row_dict)
+
+        fields: List[FieldDef] = []
+        for col in col_order:
+            ft = col_types.get(col, "V")
+            if ft == "I":
+                fields.append(FieldDef(col, "I", 10, 0))
+            elif ft in ("N", "F", "B", "Y"):
+                fields.append(FieldDef(col, "N", 14, 2))
+            elif ft == "L":
+                fields.append(FieldDef(col, "L", 1, 0))
+            else:
+                fields.append(FieldDef(col, "V", 120, 0))
+
+        cur = Cursor((cursor_name or "xmlresult").lower(), fields)
+        for rd in parsed_rows:
+            cur.append_dict(rd)
+        cur.go_top(self.set_deleted)
+        self.open_cursor_in_current_or_new(cur, in_free_area=True)
+        return cur.reccount()
+
     def sql_connect(self, conn_str: str = ":memory:") -> int:
         """
         Abre una conexión SQL Pass-Through (SQLCONNECT / SQLSTRINGCONNECT) y devuelve un handle entero (> 0).

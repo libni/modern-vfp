@@ -747,6 +747,83 @@ WHERE total_ventas >= <<lnLimite>>
         self.assertIn("Clase `serviciofacturacion`", md)
         self.assertIn("`formatearmoneda(tnmonto)`", md)
 
+    def test_cursor_adapter_object(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR articulos_orig (id I, descrip C(30), costo N(10,2))
+            INSERT INTO articulos_orig VALUES (1, "Teclado", 45.50)
+            INSERT INTO articulos_orig VALUES (2, "Mouse", 20.00)
+
+            loCA = CREATEOBJECT("CursorAdapter")
+            loCA.Alias = "articulos_ca"
+            loCA.SelectCmd = "SELECT * FROM articulos_orig WHERE costo > 25"
+            loCA.CursorSchema = "id I, descrip C(30), costo N(10,2)"
+            llOk = loCA.CursorFill(.T.)
+            lnRegs = RECCOUNT("articulos_ca")
+            lcArticulo = articulos_ca.descrip
+
+            llDetached = loCA.CursorDetach()
+            """
+        )
+        self.assertTrue(self.interp.eval_expr("llOk"))
+        self.assertEqual(self.interp.eval_expr("lnRegs"), 1)
+        self.assertEqual(self.interp.eval_expr("lcArticulo"), "Teclado")
+        self.assertTrue(self.interp.eval_expr("llDetached"))
+
+    def test_xml_cursor_interchange(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR productos_xml (id I, nombre C(30), precio N(8,2), disponible L)
+            INSERT INTO productos_xml VALUES (101, "Monitor 4K", 399.99, .T.)
+            INSERT INTO productos_xml VALUES (102, "Cable HDMI", 12.50, .F.)
+
+            lcXmlGenerado = CURSORTOXML("productos_xml")
+            lnRecsCargados = XMLTOCURSOR(lcXmlGenerado, "productos_desde_xml")
+            lnTotalXML = RECCOUNT("productos_desde_xml")
+            lcNombreP1 = productos_desde_xml.nombre
+            llDispP1 = productos_desde_xml.disponible
+            """
+        )
+        self.assertIn("<VFPData>", str(self.interp.eval_expr("lcXmlGenerado")))
+        self.assertEqual(self.interp.eval_expr("lnRecsCargados"), 2)
+        self.assertEqual(self.interp.eval_expr("lnTotalXML"), 2)
+        self.assertEqual(self.interp.eval_expr("lcNombreP1"), "Monitor 4K")
+        self.assertTrue(self.interp.eval_expr("llDispP1"))
+
+    def test_on_error_and_aerror(self) -> None:
+        self.interp.execute(
+            """
+            lnErrorCapturado = 0
+            ON ERROR lnErrorCapturado = ERROR()
+
+            ERROR 1502
+            =AERROR(laInfoError)
+            lnCodErrorArr = laInfoError[1]
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnErrorCapturado"), 1502)
+        self.assertEqual(self.interp.eval_expr("lnCodErrorArr"), 1502)
+
+        # Probar limpieza de ON ERROR
+        self.interp.execute("ON ERROR")
+        self.assertIsNone(self.interp.on_error_cmd)
+
+    def test_fox_profiler(self) -> None:
+        from modern_vfp.profiler import FoxProfiler
+
+        profiler = FoxProfiler(self.interp)
+        sample_code = """
+        x = 10
+        y = 20
+        z = x + y
+        """
+        stats = profiler.run(sample_code)
+        self.assertGreaterEqual(stats["totalTimeMs"], 0.0)
+        self.assertEqual(stats["executedLines"], 3)
+        self.assertEqual(stats["coveragePct"], 100.0)
+        rep = profiler.render_report()
+        self.assertIn("FOXNEXT PROFILER REPORT", rep)
+
 
 if __name__ == "__main__":
     unittest.main()

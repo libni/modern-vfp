@@ -180,6 +180,68 @@ class VFPCollection:
         raise AttributeError(f"Miembro '{name}' no existe en Collection.")
 
 
+class VFPCursorAdapter(VFPObject):
+    """
+    Implementación de la clase nativa CREATEOBJECT('CursorAdapter') de Visual FoxPro.
+    Soporta Alias, SelectCmd, CursorSchema, DataSourceType, KeyFieldList, Tables,
+    y los métodos .CursorFill([lUseSchema]), .CursorRefresh() y .CursorDetach().
+    """
+
+    def __init__(self, interpreter: "FoxInterpreter"):
+        super().__init__(
+            "CursorAdapter",
+            {
+                "alias": "cur_adapter",
+                "selectcmd": "",
+                "cursorschema": "",
+                "datasourcetype": "Native",
+                "keyfieldlist": "",
+                "tables": "",
+                "sendupdates": False,
+                "detached": False,
+            },
+            {},
+            interpreter,
+        )
+
+    def cursorfill(self, use_cursor_schema: bool = False) -> bool:
+        alias = str(self._props.get("alias") or "cur_adapter").strip().lower()
+        select_cmd = str(self._props.get("selectcmd") or "").strip()
+        schema_str = str(self._props.get("cursorschema") or "").strip()
+        if not select_cmd:
+            return False
+        try:
+            cur = self._interp.wam.execute_sql_select(select_cmd, alias, self._interp.current_vars())
+            if use_cursor_schema and schema_str:
+                explicit_fields = parse_schema_string(schema_str)
+                cur.fields = explicit_fields
+                cur.field_map = {f.name: f for f in explicit_fields}
+                for row in cur.records:
+                    for f in explicit_fields:
+                        row[f.name] = f.coerce(row.get(f.name))
+            return True
+        except Exception as exc:
+            self._interp.last_error = (1098, str(exc), select_cmd)
+            return False
+
+    def cursorrefresh(self) -> bool:
+        return self.cursorfill(bool(self._props.get("cursorschema")))
+
+    def cursordetach(self) -> bool:
+        self._props["detached"] = True
+        return True
+
+    def __getattr__(self, item: str) -> Any:
+        il = item.lower()
+        if il == "cursorfill":
+            return self.cursorfill
+        if il == "cursorrefresh":
+            return self.cursorrefresh
+        if il == "cursordetach":
+            return self.cursordetach
+        return super().__getattr__(item)
+
+
 class _AliasProxy:
     """
     Permite resolver expresiones del tipo `clientes.nombre` o `THIS.propiedad` dentro del evaluador.
@@ -276,6 +338,11 @@ class FoxInterpreter:
         self.functions["raiseevent"] = self.raise_event
         self.functions["requery"] = self.requery
         self.functions["adir"] = self.adir
+        self.functions["cursortoxml"] = self.cursor_to_xml
+        self.functions["xmltocursor"] = self.xml_to_cursor
+        self.functions["error"] = self.fn_error_num
+        self.functions["message"] = self.fn_error_msg
+        self.functions["aerror"] = self.fn_aerror
         self.functions["__vfp_idx__"] = self._vfp_array_index
 
         self.global_vars: Dict[str, Any] = {}
@@ -284,6 +351,10 @@ class FoxInterpreter:
         self._method_stack: List[Tuple[VFPObject, str]] = []
         self.asserts_enabled: bool = True
         self.menus: Dict[str, Any] = {}
+        self.on_error_cmd: Optional[str] = None
+        self.last_error: Tuple[int, str, str] = (0, "", "")
+        self._try_depth: int = 0
+        self._in_error_handler: bool = False
 
         # Procedimientos / Funciones definidas por el usuario: name -> (params, body_lines)
         self.procedures: Dict[str, Tuple[List[str], List[str]]] = {}
@@ -326,6 +397,38 @@ class FoxInterpreter:
             array_name_or_ref.extend(rows)
         return len(rows)
 
+    def cursor_to_xml(self, alias_or_area: Any = None, out_target: Optional[str] = None) -> Any:
+        xml_str = self.wam.cursor_to_xml(alias_or_area)
+        if out_target:
+            target_str = str(out_target).strip()
+            if "/" in target_str or "\\" in target_str or target_str.lower().endswith(".xml"):
+                Path(target_str).write_text(xml_str, encoding="utf-8")
+                return len(xml_str.encode("utf-8"))
+            self.set_var(target_str, xml_str)
+            return len(xml_str)
+        return xml_str
+
+    def xml_to_cursor(self, xml_source: Any, cursor_name: str = "xmlresult") -> int:
+        return self.wam.xml_to_cursor(str(xml_source), cursor_name)
+
+    def fn_error_num(self) -> int:
+        return self.last_error[0]
+
+    def fn_error_msg(self) -> str:
+        return self.last_error[1]
+
+    def fn_aerror(self, array_name_or_ref: Any) -> int:
+        errno, errmsg, errstmt = self.last_error
+        if errno == 0 and not errmsg:
+            return 0
+        row = [errno, errmsg, errstmt, "", "", "", ""]
+        if isinstance(array_name_or_ref, str):
+            self.set_var(array_name_or_ref, [row])
+        elif isinstance(array_name_or_ref, list):
+            array_name_or_ref.clear()
+            array_name_or_ref.append(row)
+        return 1
+
     @staticmethod
     def _vfp_array_index(arr: Any, idx1: Any, idx2: Any = None) -> Any:
         if isinstance(arr, list):
@@ -333,6 +436,10 @@ class FoxInterpreter:
             if idx2 is not None:
                 i2 = int(idx2) - 1
                 return arr[i1][i2]
+            if arr and isinstance(arr[0], list):
+                flat = [item for sub in arr for item in (sub if isinstance(sub, list) else [sub])]
+                if 0 <= i1 < len(flat):
+                    return flat[i1]
             return arr[i1]
         return arr[idx1]
 
@@ -453,6 +560,8 @@ class FoxInterpreter:
             return VFPObject("Empty", {}, {}, self)
         if cl == "collection":
             return VFPCollection()
+        if cl == "cursoradapter":
+            return VFPCursorAdapter(self)
         if cl not in self.classes:
             raise ValueError(f"La clase '{class_name}' no está definida.")
 
@@ -584,6 +693,22 @@ class FoxInterpreter:
         s = re.sub(
             r"\bADIR\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*([,)])",
             lambda m: f'ADIR("{m.group(1)}"{m.group(2)}',
+            s,
+            flags=re.IGNORECASE,
+        )
+
+        # Auto-entrecomillar nombre de arreglo en AERROR(laErr)
+        s = re.sub(
+            r"\bAERROR\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+            lambda m: f'AERROR("{m.group(1)}")',
+            s,
+            flags=re.IGNORECASE,
+        )
+
+        # Auto-entrecomillar segundo argumento en CURSORTOXML(alias, lcVar) si es identificador sin comillas
+        s = re.sub(
+            r"\bCURSORTOXML\s*\(\s*([^\s,]+)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+            lambda m: f'CURSORTOXML({m.group(1)}, "{m.group(2)}")',
             s,
             flags=re.IGNORECASE,
         )
@@ -928,6 +1053,7 @@ class FoxInterpreter:
             # Estructura TRY ... CATCH ... FINALLY ... ENDTRY
             if re.match(r"^TRY\b", line, flags=re.IGNORECASE):
                 end_idx, try_blk, catch_var, catch_blk, finally_blk = self._collect_try_block(lines, i)
+                self._try_depth += 1
                 try:
                     self._exec_block(try_blk)
                 except (_ReturnSignal, _LoopExit, _LoopContinue):
@@ -941,6 +1067,7 @@ class FoxInterpreter:
                     else:
                         raise
                 finally:
+                    self._try_depth -= 1
                     if finally_blk is not None:
                         self._exec_block(finally_blk)
                 i = end_idx + 1
@@ -981,7 +1108,22 @@ class FoxInterpreter:
                 continue
 
             # Ejecutar sentencia individual
-            self._exec_statement(line)
+            try:
+                self._exec_statement(line)
+            except (_ReturnSignal, _LoopExit, _LoopContinue):
+                raise
+            except Exception as exc:
+                if self._try_depth > 0:
+                    raise
+                self.last_error = (getattr(exc, "vfp_errno", 1098), str(exc), line)
+                if self.on_error_cmd and not self._in_error_handler:
+                    self._in_error_handler = True
+                    try:
+                        self.execute(self.on_error_cmd)
+                    finally:
+                        self._in_error_handler = False
+                else:
+                    raise
             i += 1
         return None
 
@@ -1962,6 +2104,30 @@ class FoxInterpreter:
                         self.emit(menu_obj.render_tui())
                     break
             return
+
+        # 16t. ON ERROR [comando]
+        m_on_err = re.match(r"^ON\s+ERROR(?:\s+(.*))?$", line, flags=re.IGNORECASE)
+        if m_on_err:
+            cmd = m_on_err.group(1).strip() if m_on_err.group(1) else ""
+            self.on_error_cmd = cmd if cmd else None
+            return
+
+        # 16u. ERROR <expr>
+        m_err_cmd = re.match(r"^ERROR\s+(.+)$", line, flags=re.IGNORECASE)
+        if m_err_cmd and not re.match(r"^ERROR\s*\(", line, flags=re.IGNORECASE):
+            raw_val = self.eval_expr(m_err_cmd.group(1).strip())
+            if isinstance(raw_val, int):
+                self.last_error = (raw_val, f"Error {raw_val}", line)
+            else:
+                self.last_error = (1098, str(raw_val), line)
+            if self.on_error_cmd and not self._in_error_handler:
+                self._in_error_handler = True
+                try:
+                    self.execute(self.on_error_cmd)
+                finally:
+                    self._in_error_handler = False
+                return
+            raise RuntimeError(self.last_error[1])
 
         # 17. DO <procedimiento | archivo.prg> [WITH a, b]
         m_do = re.match(r'^DO\s+([^\s]+)(?:\s+WITH\s+(.*))?$', line, flags=re.IGNORECASE)

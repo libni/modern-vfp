@@ -257,6 +257,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[FoxDocGen] Documentación Markdown generada en: {dest}")
         return 0
 
+    if args[0] == "--profile" and len(args) >= 2:
+        from .profiler import profile_file
+
+        print(profile_file(args[1], interp))
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)

@@ -964,6 +964,108 @@ WHERE total_ventas >= <<lnLimite>>
                 os.chdir(orig_cwd)
 
 
+    def test_concurrency_locks_and_unlock(self) -> None:
+        self.interp.execute(
+            """
+            SET EXCLUSIVE OFF
+            SET MULTILOCKS ON
+            CREATE CURSOR inventario_locks (id I, descripcion C(30))
+            INSERT INTO inventario_locks VALUES (1, "Procesador i9")
+            INSERT INTO inventario_locks VALUES (2, "Memoria RAM 64GB")
+            GO 1
+            llLockRec1 = RLOCK()
+            llIsLocked1 = ISLOCKED(1)
+            llIsLocked2 = ISLOCKED(2)
+
+            GO 2
+            llLockRec2 = RLOCK()
+            llIsLocked2Despues = ISLOCKED(2)
+
+            UNLOCK RECORD 1 IN inventario_locks
+            llIsLocked1Despues = ISLOCKED(1)
+
+            llTableLock = FLOCK("inventario_locks")
+            llIsLockedTable = ISLOCKED(1)
+
+            UNLOCK ALL
+            llIsLockedFinal = ISLOCKED(1)
+            """
+        )
+        self.assertTrue(self.interp.eval_expr("llLockRec1"))
+        self.assertTrue(self.interp.eval_expr("llIsLocked1"))
+        self.assertFalse(self.interp.eval_expr("llIsLocked2"))
+        self.assertTrue(self.interp.eval_expr("llLockRec2"))
+        self.assertTrue(self.interp.eval_expr("llIsLocked2Despues"))
+        self.assertFalse(self.interp.eval_expr("llIsLocked1Despues"))
+        self.assertTrue(self.interp.eval_expr("llTableLock"))
+        self.assertTrue(self.interp.eval_expr("llIsLockedTable"))
+        self.assertFalse(self.interp.eval_expr("llIsLockedFinal"))
+
+    def test_soundex_and_difference_algorithms(self) -> None:
+        self.interp.execute(
+            """
+            lcSmith = SOUNDEX("Smith")
+            lcSmythe = SOUNDEX("Smythe")
+            lnDifSmith = DIFFERENCE("Smith", "Smythe")
+            lnDifJones = DIFFERENCE("Smith", "Jones")
+            lcRobert = SOUNDEX("Robert")
+            lcRupert = SOUNDEX("Rupert")
+            lnDifRobert = DIFFERENCE("Robert", "Rupert")
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lcSmith"), "S530")
+        self.assertEqual(self.interp.eval_expr("lcSmythe"), "S530")
+        self.assertEqual(self.interp.eval_expr("lnDifSmith"), 4)
+        self.assertLess(self.interp.eval_expr("lnDifJones"), 4)
+        self.assertEqual(self.interp.eval_expr("lcRobert"), "R163")
+        self.assertEqual(self.interp.eval_expr("lcRupert"), "R163")
+        self.assertEqual(self.interp.eval_expr("lnDifRobert"), 4)
+
+    def test_event_bus_reactive_pub_sub(self) -> None:
+        self.interp.execute(
+            """
+            nTotalRecibido = 0
+            cMsgRecibido = ""
+
+            PROCEDURE OnOrdenCreada(toMonto)
+                nTotalRecibido = toMonto
+                cMsgRecibido = "PROCESADO"
+            ENDPROC
+
+            SUBSCRIBE EVENT "orden.pagada" WITH OnOrdenCreada
+            PUBLISH EVENT "orden.pagada" DATA 750
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("nTotalRecibido"), 750)
+        self.assertEqual(self.interp.eval_expr("cMsgRecibido"), "PROCESADO")
+
+    def test_excel_xlsx_export_and_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            xlsx_path = Path(tmpdir) / "planilla.xlsx"
+            self.interp.execute(
+                f"""
+                CREATE CURSOR cur_excel_src (id I, empleado C(30), salario N(12,2), activo L)
+                INSERT INTO cur_excel_src VALUES (101, "Carlos Gomez", 4500.50, .T.)
+                INSERT INTO cur_excel_src VALUES (102, "Maria Silva", 5200.00, .F.)
+
+                COPY TO '{xlsx_path}' TYPE XLSX
+
+                CREATE CURSOR cur_excel_dst (id I, empleado C(30), salario N(12,2), activo L)
+                APPEND FROM '{xlsx_path}' TYPE XLSX
+                lnCount = RECCOUNT("cur_excel_dst")
+                GO 1 IN cur_excel_dst
+                lcNom1 = cur_excel_dst.empleado
+                lnSal1 = cur_excel_dst.salario
+                llAct1 = cur_excel_dst.activo
+                """
+            )
+            self.assertTrue(xlsx_path.is_file())
+            self.assertEqual(self.interp.eval_expr("lnCount"), 2)
+            self.assertEqual(self.interp.eval_expr("lcNom1"), "Carlos Gomez")
+            self.assertEqual(self.interp.eval_expr("lnSal1"), 4500.50)
+            self.assertTrue(self.interp.eval_expr("llAct1"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

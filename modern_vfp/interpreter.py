@@ -344,9 +344,20 @@ class FoxInterpreter:
         self.functions["message"] = self.fn_error_msg
         self.functions["aerror"] = self.fn_aerror
         self.functions["__vfp_idx__"] = self._vfp_array_index
+        self.functions["soundex"] = self.fn_soundex
+        self.functions["difference"] = self.fn_difference
+        self.functions["rlock"] = self.fn_rlock
+        self.functions["flock"] = self.fn_flock
+        self.functions["islocked"] = self.fn_islocked
+        self.functions["isreadonly"] = self.fn_isreadonly
 
         from .rushmore import RushmoreEngine
+        from .locks import LockManager
+        from .eventbus import FoxEventBus
+
         self.rushmore = RushmoreEngine()
+        self.locks = LockManager()
+        self.event_bus = FoxEventBus()
         self.active_dbc: Optional[Any] = None
 
         self.global_vars: Dict[str, Any] = {}
@@ -432,6 +443,77 @@ class FoxInterpreter:
             array_name_or_ref.clear()
             array_name_or_ref.append(row)
         return 1
+
+    def fn_soundex(self, expr: Any) -> str:
+        s = "".join([c for c in str(expr).upper() if c.isalpha()])
+        if not s:
+            return "0000"
+        mapping = {
+            'B': '1', 'F': '1', 'P': '1', 'V': '1',
+            'C': '2', 'G': '2', 'J': '2', 'K': '2', 'Q': '2', 'S': '2', 'X': '2', 'Z': '2',
+            'D': '3', 'T': '3',
+            'L': '4',
+            'M': '5', 'N': '5',
+            'R': '6',
+        }
+        first_letter = s[0]
+        first_code = mapping.get(first_letter, "0")
+        encoded = [first_letter]
+        prev_code = first_code
+        for char in s[1:]:
+            code = mapping.get(char, "0")
+            if code != "0":
+                if code != prev_code:
+                    encoded.append(code)
+                prev_code = code
+            else:
+                prev_code = "0"
+        res = "".join(encoded)
+        return (res + "0000")[:4]
+
+    def fn_difference(self, expr1: Any, expr2: Any) -> int:
+        snd1 = self.fn_soundex(expr1)
+        snd2 = self.fn_soundex(expr2)
+        return sum(1 for a, b in zip(snd1, snd2) if a == b)
+
+    def fn_rlock(self, recno: Optional[Any] = None, alias: Optional[Any] = None) -> bool:
+        al = str(alias).lower().strip() if alias is not None else None
+        if not al:
+            cur = self.wam.current_cursor()
+            if not cur:
+                return False
+            al = cur.alias
+        else:
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                return False
+        if recno is None:
+            rn = cur.recno()
+        else:
+            rn = int(recno)
+        return self.locks.rlock(al, rn)
+
+    def fn_flock(self, alias: Optional[Any] = None) -> bool:
+        al = str(alias).lower().strip() if alias is not None else None
+        if not al:
+            cur = self.wam.current_cursor()
+            if not cur:
+                return False
+            al = cur.alias
+        return self.locks.flock(al)
+
+    def fn_islocked(self, recno: Optional[Any] = None, alias: Optional[Any] = None) -> bool:
+        al = str(alias).lower().strip() if alias is not None else None
+        if not al:
+            cur = self.wam.current_cursor()
+            if not cur:
+                return False
+            al = cur.alias
+        rn = int(recno) if recno is not None else None
+        return self.locks.is_locked(al, rn)
+
+    def fn_isreadonly(self, alias: Optional[Any] = None) -> bool:
+        return False
 
     @staticmethod
     def _vfp_array_index(arr: Any, idx1: Any, idx2: Any = None) -> Any:
@@ -551,12 +633,18 @@ class FoxInterpreter:
         elif scope == "public":
             self.global_vars[nl] = val
         else:
-            if self.call_stack and nl in self.call_stack[-1]:
-                self.call_stack[-1][nl] = val
-            elif self.call_stack:
-                self.call_stack[-1][nl] = val
-            else:
-                self.global_vars[nl] = val
+            found_in_stack = False
+            if self.call_stack:
+                for frame in reversed(self.call_stack):
+                    if nl in frame:
+                        frame[nl] = val
+                        found_in_stack = True
+                        break
+            if not found_in_stack:
+                if nl in self.global_vars or not self.call_stack:
+                    self.global_vars[nl] = val
+                else:
+                    self.call_stack[-1][nl] = val
 
     def create_object(self, class_name: str, *args: Any) -> Any:
         cl = class_name.strip().lower()
@@ -1455,21 +1543,32 @@ class FoxInterpreter:
             return
 
         # 12. Navegación de Puntero: GO TOP, GO BOTTOM, GOTO n, SKIP [n]
-        if re.match(r"^GO(?:\s+TO)?\s+TOP\b", line, flags=re.IGNORECASE):
-            cur = self._require_cursor("GO TOP")
+        m_go_top = re.match(r"^GO(?:\s+TO)?\s+TOP(?:\s+IN\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$", line, flags=re.IGNORECASE)
+        if m_go_top:
+            al = m_go_top.group(1)
+            cur = self.wam.get_cursor(al.lower()) if al else self._require_cursor("GO TOP")
+            if not cur:
+                raise RuntimeError(f"No existe el cursor o alias '{al}'.")
             cur.go_top(self.wam.set_deleted)
             self.wam.sync_relations(self.eval_expr)
             return
 
-        if re.match(r"^GO(?:\s+TO)?\s+BOTTOM\b", line, flags=re.IGNORECASE):
-            cur = self._require_cursor("GO BOTTOM")
+        m_go_bot = re.match(r"^GO(?:\s+TO)?\s+BOTTOM(?:\s+IN\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$", line, flags=re.IGNORECASE)
+        if m_go_bot:
+            al = m_go_bot.group(1)
+            cur = self.wam.get_cursor(al.lower()) if al else self._require_cursor("GO BOTTOM")
+            if not cur:
+                raise RuntimeError(f"No existe el cursor o alias '{al}'.")
             cur.go_bottom(self.wam.set_deleted)
             self.wam.sync_relations(self.eval_expr)
             return
 
-        m_goto = re.match(r"^(?:GOTO|GO)\s+(\d+)\s*$", line, flags=re.IGNORECASE)
+        m_goto = re.match(r"^(?:GOTO|GO)(?:\s+RECORD)?\s+(\d+)(?:\s+IN\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$", line, flags=re.IGNORECASE)
         if m_goto:
-            cur = self._require_cursor("GOTO")
+            al = m_goto.group(2)
+            cur = self.wam.get_cursor(al.lower()) if al else self._require_cursor("GOTO")
+            if not cur:
+                raise RuntimeError(f"No existe el cursor o alias '{al}'.")
             cur.goto(int(m_goto.group(1)))
             self.wam.sync_relations(self.eval_expr)
             return
@@ -1619,7 +1718,7 @@ class FoxInterpreter:
             return
 
         m_copy = re.match(
-            r"^COPY\s+TO\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|FOX2X|PARQUET))?\s*$",
+            r"^COPY\s+TO\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|FOX2X|PARQUET|XLSX))?\s*$",
             line,
             flags=re.IGNORECASE,
         )
@@ -1636,6 +1735,8 @@ class FoxInterpreter:
                     fmt = "JSON"
                 elif ext == ".parquet":
                     fmt = "PARQUET"
+                elif ext in (".xlsx", ".xls"):
+                    fmt = "XLSX"
                 else:
                     fmt = "DBF"
                     if not ext:
@@ -1653,13 +1754,16 @@ class FoxInterpreter:
             elif fmt == "PARQUET":
                 from .parquet import write_parquet
                 write_parquet(cur, path, self.wam.set_deleted)
+            elif fmt == "XLSX":
+                from .excel import write_xlsx
+                write_xlsx(cur, path, self.wam.set_deleted)
             else:
                 write_dbf(path, fdicts, vis_rows, vis_dels)
             return
 
-        # 16b. APPEND FROM <archivo> [TYPE CSV|JSON|DBF|PARQUET]
+        # 16b. APPEND FROM <archivo> [TYPE CSV|JSON|DBF|PARQUET|XLSX]
         m_app_from = re.match(
-            r"^APPEND\s+FROM\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|PARQUET))?\s*$",
+            r"^APPEND\s+FROM\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|PARQUET|XLSX))?\s*$",
             line,
             flags=re.IGNORECASE,
         )
@@ -1676,6 +1780,8 @@ class FoxInterpreter:
                     fmt = "JSON"
                 elif ext == ".parquet":
                     fmt = "PARQUET"
+                elif ext in (".xlsx", ".xls"):
+                    fmt = "XLSX"
                 else:
                     fmt = "DBF"
                     if not ext:
@@ -1688,6 +1794,13 @@ class FoxInterpreter:
                 from .parquet import read_parquet
                 pq_cur = read_parquet(path)
                 for r in pq_cur.records:
+                    cur.append_dict(r)
+                cur.go_top(self.wam.set_deleted)
+                return
+            elif fmt == "XLSX":
+                from .excel import read_xlsx
+                xl_cur = read_xlsx(path)
+                for r in xl_cur.records:
                     cur.append_dict(r)
                 cur.go_top(self.wam.set_deleted)
                 return
@@ -2215,6 +2328,51 @@ class FoxInterpreter:
                 raise RuntimeError("No hay ninguna base de datos activa para validar.")
             res = self.active_dbc.validate_database(self.eval_expr)
             self.emit(f"Base de Datos '{res['database']}': {'Válida' if res['isValid'] else 'Con observaciones'}")
+            return
+
+        # 16x. Concurrencia y Bloqueos: SET EXCLUSIVE, SET MULTILOCKS, UNLOCK
+        m_set_excl = re.match(r"^SET\s+EXCLUSIVE\s+(ON|OFF)\s*$", line, flags=re.IGNORECASE)
+        if m_set_excl:
+            self.locks.set_exclusive = m_set_excl.group(1).upper() == "ON"
+            return
+
+        m_set_multi = re.match(r"^SET\s+MULTILOCKS?\s+(ON|OFF)\s*$", line, flags=re.IGNORECASE)
+        if m_set_multi:
+            self.locks.set_multilocks = m_set_multi.group(1).upper() == "ON"
+            return
+
+        if re.match(r"^UNLOCK\s+ALL\b", line, flags=re.IGNORECASE):
+            self.locks.unlock()
+            return
+
+        m_unlock = re.match(
+            r"^UNLOCK(?:\s+RECORD\s+(\d+|[A-Za-z_][A-Za-z0-9_]*))?(?:\s+IN\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_unlock and not re.match(r"^UNLOCK\s*\(", line, flags=re.IGNORECASE):
+            rec_raw = m_unlock.group(1)
+            recno = int(self.eval_expr(rec_raw)) if rec_raw else None
+            alias = m_unlock.group(2)
+            if not alias:
+                cur = self.wam.current_cursor()
+                alias = cur.alias if cur else None
+            self.locks.unlock(alias=alias, recno=recno, all_records=(recno is None))
+            return
+
+        # 16y. Arquitectura Reactiva y Bus de Eventos: PUBLISH EVENT, SUBSCRIBE EVENT
+        m_pub = re.match(r"^PUBLISH\s+EVENT\s+([^\s]+)(?:\s+DATA\s+(.+))?\s*$", line, flags=re.IGNORECASE)
+        if m_pub:
+            topic = m_pub.group(1).strip("\"'")
+            data_val = self.eval_expr(m_pub.group(2).strip()) if m_pub.group(2) else None
+            self.event_bus.publish(topic, data_val, interpreter=self)
+            return
+
+        m_sub = re.match(r"^SUBSCRIBE\s+EVENT\s+([^\s]+)\s+WITH\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", line, flags=re.IGNORECASE)
+        if m_sub:
+            topic = m_sub.group(1).strip("\"'")
+            proc_name = m_sub.group(2).strip()
+            self.event_bus.subscribe_procedure(topic, proc_name)
             return
 
         # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]

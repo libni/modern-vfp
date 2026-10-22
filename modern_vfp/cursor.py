@@ -930,6 +930,11 @@ class WorkAreaManager:
             del self.work_areas[old_area]
             del self.alias_to_area[alias]
 
+        if not in_free_area and self.current_area in self.work_areas:
+            old_cur = self.work_areas[self.current_area]
+            if old_cur.alias.lower() in self.alias_to_area:
+                del self.alias_to_area[old_cur.alias.lower()]
+
         area = self.next_free_area() if in_free_area else self.current_area
         self.work_areas[area] = cursor
         self.alias_to_area[alias] = area

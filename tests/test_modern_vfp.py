@@ -1066,6 +1066,108 @@ WHERE total_ventas >= <<lnLimite>>
             self.assertTrue(self.interp.eval_expr("llAct1"))
 
 
+    def test_crypto_sys2007_hash_hmac_and_ciphers(self) -> None:
+        self.interp.execute(
+            """
+            lcCrc = SYS(2007, "Visual FoxPro")
+            lcSha256 = HASH("secreto123", "sha256")
+            lcMd5 = HASH("secreto123", "md5")
+            lcHmac = HMAC("payload-datos", "clave-api", "sha256")
+            lcTextoOriginal = "Mensaje confidencial de nómina 2026"
+            lcCifrado = ENCRYPT(lcTextoOriginal, "LlaveMaestraFoxNext")
+            lcDescifrado = DECRYPT(lcCifrado, "LlaveMaestraFoxNext")
+            """
+        )
+        self.assertTrue(len(self.interp.eval_expr("lcCrc")) > 0)
+        self.assertEqual(len(self.interp.eval_expr("lcSha256")), 64)
+        self.assertEqual(len(self.interp.eval_expr("lcMd5")), 32)
+        self.assertEqual(len(self.interp.eval_expr("lcHmac")), 64)
+        self.assertNotEqual(self.interp.eval_expr("lcCifrado"), "Mensaje confidencial de nómina 2026")
+        self.assertEqual(self.interp.eval_expr("lcDescifrado"), "Mensaje confidencial de nómina 2026")
+
+    def test_full_text_search_engine(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR blog_posts (id I, titulo C(60), contenido C(200))
+            INSERT INTO blog_posts VALUES (1, "Arquitectura Microservicios", "Implementando API REST con alta concurrencia y Docker")
+            INSERT INTO blog_posts VALUES (2, "Bases de Datos Relacionales", "Optimización de consultas SQL con índices y planes de ejecución")
+            INSERT INTO blog_posts VALUES (3, "Inteligencia Artificial", "Modelos de lenguaje y redes neuronales profundas")
+
+            CREATE FULLTEXT INDEX ON blog_posts (titulo, contenido)
+            FULLTEXT SEARCH "consultas sql índices" IN blog_posts INTO CURSOR fts_res
+            lnEncontrados = RECCOUNT("fts_res")
+            GO 1 IN fts_res
+            lnMejorId = fts_res.id
+
+            GO 1 IN blog_posts
+            llMatch1 = FTSMATCH("blog_posts", "microservicios docker")
+            llMatch3 = FTSMATCH("blog_posts", "neuronales")
+            """
+        )
+        self.assertGreater(self.interp.eval_expr("lnEncontrados"), 0)
+        self.assertEqual(self.interp.eval_expr("lnMejorId"), 2)
+        self.assertTrue(self.interp.eval_expr("llMatch1"))
+        self.assertFalse(self.interp.eval_expr("llMatch3"))
+
+    def test_schema_validator_json_contracts(self) -> None:
+        schema_json = """{
+            "required": ["id", "cliente", "monto"],
+            "properties": {
+                "id": {"type": "integer"},
+                "cliente": {"type": "string", "minLength": 2},
+                "monto": {"type": "number", "minimum": 1.0}
+            }
+        }"""
+        self.interp.set_var("lcSchema", schema_json)
+        self.interp.execute(
+            """
+            CREATE CURSOR ordenes_validas (id I, cliente C(30), monto N(10,2))
+            INSERT INTO ordenes_validas VALUES (1, "Acme Corp", 1500.00)
+            INSERT INTO ordenes_validas VALUES (2, "Tech Solutions", 85.50)
+            llValido = ISVALIDCURSOR("ordenes_validas", lcSchema)
+
+            CREATE CURSOR ordenes_invalidas (id I, cliente C(30), monto N(10,2))
+            INSERT INTO ordenes_invalidas VALUES (3, "X", -50.00)
+            DIMENSION laErrores[1]
+            llInvalido = ISVALIDCURSOR("ordenes_invalidas", lcSchema, "laErrores")
+            lnTotalErrores = ALEN(laErrores, 1)
+            """
+        )
+        self.assertTrue(self.interp.eval_expr("llValido"))
+        self.assertFalse(self.interp.eval_expr("llInvalido"))
+        self.assertGreater(self.interp.eval_expr("lnTotalErrores"), 0)
+
+    def test_crosstab_dynamic_pivot_tables(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR ventas_mes (vendedor C(20), mes C(10), monto N(10,2))
+            INSERT INTO ventas_mes VALUES ("Ana", "Ene", 100.00)
+            INSERT INTO ventas_mes VALUES ("Ana", "Feb", 150.00)
+            INSERT INTO ventas_mes VALUES ("Carlos", "Ene", 200.00)
+            INSERT INTO ventas_mes VALUES ("Carlos", "Feb", 350.00)
+
+            CROSSTAB ventas_mes ON vendedor COLUMNS mes VALUES monto AGGREGATE SUM INTO CURSOR pivote_ventas
+            lnFilasPivote = RECCOUNT("pivote_ventas")
+            GO 1 IN pivote_ventas
+            lcVend1 = pivote_ventas.vendedor
+            lnEne1 = pivote_ventas.ene
+            lnFeb1 = pivote_ventas.feb
+            lnTotal1 = pivote_ventas.total
+
+            GO 2 IN pivote_ventas
+            lcVend2 = pivote_ventas.vendedor
+            lnTotal2 = pivote_ventas.total
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnFilasPivote"), 2)
+        self.assertEqual(self.interp.eval_expr("lcVend1"), "Ana")
+        self.assertEqual(self.interp.eval_expr("lnEne1"), 100.00)
+        self.assertEqual(self.interp.eval_expr("lnFeb1"), 150.00)
+        self.assertEqual(self.interp.eval_expr("lnTotal1"), 250.00)
+        self.assertEqual(self.interp.eval_expr("lcVend2"), "Carlos")
+        self.assertEqual(self.interp.eval_expr("lnTotal2"), 550.00)
+
+
 if __name__ == "__main__":
     unittest.main()
 

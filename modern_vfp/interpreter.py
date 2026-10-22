@@ -350,14 +350,27 @@ class FoxInterpreter:
         self.functions["flock"] = self.fn_flock
         self.functions["islocked"] = self.fn_islocked
         self.functions["isreadonly"] = self.fn_isreadonly
+        self.functions["hash"] = self.fn_hash
+        self.functions["hmac"] = self.fn_hmac
+        self.functions["encrypt"] = self.fn_encrypt
+        self.functions["decrypt"] = self.fn_decrypt
+        self.functions["ftssearch"] = self.fn_ftssearch
+        self.functions["ftsmatch"] = self.fn_ftsmatch
+        self.functions["isvalidcursor"] = self.fn_isvalidcursor
+        self.functions["crosstab"] = self.fn_crosstab
+
+        self._orig_sys = self.functions.get("sys")
+        self.functions["sys"] = self.fn_sys_enhanced
 
         from .rushmore import RushmoreEngine
         from .locks import LockManager
         from .eventbus import FoxEventBus
+        from .fts import FullTextSearchEngine
 
         self.rushmore = RushmoreEngine()
         self.locks = LockManager()
         self.event_bus = FoxEventBus()
+        self.fts = FullTextSearchEngine()
         self.active_dbc: Optional[Any] = None
 
         self.global_vars: Dict[str, Any] = {}
@@ -514,6 +527,93 @@ class FoxInterpreter:
 
     def fn_isreadonly(self, alias: Optional[Any] = None) -> bool:
         return False
+
+    def fn_sys_enhanced(self, func_num: int, *args: Any) -> Any:
+        code = int(func_num)
+        if code == 2007:
+            from .crypto import sys_2007
+            c_val = args[0] if args else ""
+            n_flag = int(args[1]) if len(args) > 1 else 0
+            return sys_2007(c_val, n_flag)
+        if code == 3054:
+            return self.rushmore.sys_3054(*args)
+        if self._orig_sys:
+            return self._orig_sys(func_num, *args)
+        return ""
+
+    def fn_hash(self, expr: Any, algorithm: str = "sha256") -> str:
+        from .crypto import hash_data
+        return hash_data(expr, algorithm)
+
+    def fn_hmac(self, message: Any, key: str, algorithm: str = "sha256") -> str:
+        from .crypto import hmac_sign
+        return hmac_sign(message, key, algorithm)
+
+    def fn_encrypt(self, text: str, key: str) -> str:
+        from .crypto import encrypt_data
+        return encrypt_data(text, key)
+
+    def fn_decrypt(self, ciphertext: str, key: str) -> str:
+        from .crypto import decrypt_data
+        return decrypt_data(ciphertext, key)
+
+    def fn_ftssearch(self, alias: str, query: str) -> List[int]:
+        cur = self.wam.get_cursor(str(alias).lower().strip())
+        if not cur:
+            return []
+        ranked = self.fts.search(cur, str(query), self.wam.set_deleted)
+        return [recno for recno, _ in ranked]
+
+    def fn_ftsmatch(self, alias_or_query: str, query: Optional[str] = None) -> bool:
+        if query is None:
+            cur = self.wam.current_cursor()
+            q = alias_or_query
+        else:
+            cur = self.wam.get_cursor(str(alias_or_query).lower().strip())
+            q = query
+        if not cur:
+            return False
+        return self.fts.is_match(cur, str(q))
+
+    def fn_isvalidcursor(self, alias: str, schema_json_or_path: Any, err_array: Optional[Any] = None) -> bool:
+        from .schema_validator import validate_cursor
+        cur = self.wam.get_cursor(str(alias).lower().strip())
+        if not cur:
+            return False
+        errs = validate_cursor(cur, schema_json_or_path, self.wam.set_deleted)
+        if err_array is not None and errs:
+            rows = [[e.recno, e.field, e.rule, e.message, str(e.value)] for e in errs]
+            if isinstance(err_array, str):
+                self.set_var(err_array, rows)
+            elif isinstance(err_array, list):
+                err_array.clear()
+                err_array.extend(rows)
+        return len(errs) == 0
+
+    def fn_crosstab(
+        self,
+        source_alias: str,
+        row_field: str,
+        col_field: str,
+        val_field: str,
+        agg_func: str = "SUM",
+        into_alias: str = "xtab_result",
+    ) -> bool:
+        from .crosstab import crosstab
+        cur = self.wam.get_cursor(str(source_alias).lower().strip())
+        if not cur:
+            raise RuntimeError(f"No existe el cursor '{source_alias}'.")
+        out_cur = crosstab(
+            cur,
+            row_field=str(row_field),
+            col_field=str(col_field),
+            val_field=str(val_field),
+            agg_func=str(agg_func),
+            into_alias=str(into_alias),
+            set_deleted_on=self.wam.set_deleted,
+        )
+        self.wam.open_cursor_in_current_or_new(out_cur, in_free_area=True)
+        return True
 
     @staticmethod
     def _vfp_array_index(arr: Any, idx1: Any, idx2: Any = None) -> Any:
@@ -2373,6 +2473,82 @@ class FoxInterpreter:
             topic = m_sub.group(1).strip("\"'")
             proc_name = m_sub.group(2).strip()
             self.event_bus.subscribe_procedure(topic, proc_name)
+            return
+
+        # 16z. Búsqueda Full-Text (FTS): CREATE FULLTEXT INDEX, FULLTEXT SEARCH
+        m_cf_idx = re.match(
+            r"^CREATE\s+FULLTEXT\s+INDEX\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s*\((.+?)\)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_cf_idx:
+            al = m_cf_idx.group(1).lower()
+            fields = [f.strip() for f in m_cf_idx.group(2).split(",") if f.strip()]
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            self.fts.create_index(cur, fields, self.wam.set_deleted)
+            return
+
+        m_fts_search = re.match(
+            r"^FULLTEXT\s+SEARCH\s+(.+?)\s+IN\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_fts_search:
+            q_raw = m_fts_search.group(1).strip()
+            query_val = str(self.eval_expr(q_raw)) if (q_raw.startswith('"') or q_raw.startswith("'")) else q_raw
+            al = m_fts_search.group(2).lower()
+            target_al = (m_fts_search.group(3) or f"{al}_fts").lower()
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            ranked = self.fts.search(cur, query_val, self.wam.set_deleted)
+            out_fields = list(cur.fields) + [FieldDef("fts_score", "N", 10, 4)]
+            res_cur = Cursor(target_al, out_fields)
+            for recno, score in ranked:
+                row = dict(cur.records[recno - 1])
+                row["fts_score"] = round(score, 4)
+                res_cur.append_dict(row)
+            res_cur.go_top(self.wam.set_deleted)
+            self.wam.open_cursor_in_current_or_new(res_cur, in_free_area=True)
+            return
+
+        # 16aa. Validación de Contratos y Esquemas JSON: VALIDATE CURSOR
+        m_val_cur = re.match(
+            r"^VALIDATE\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*)\s+AGAINST\s+SCHEMA\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_val_cur:
+            al = m_val_cur.group(1).lower()
+            schema_expr = m_val_cur.group(2).strip()
+            schema_val = self.eval_expr(schema_expr)
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            from .schema_validator import validate_cursor
+            errs = validate_cursor(cur, schema_val, self.wam.set_deleted)
+            if errs:
+                msg = f"Validación de Cursor '{al}' falló con {len(errs)} error(es): " + "; ".join(str(e) for e in errs[:3])
+                self.last_error = (1500, msg, line)
+                raise ValueError(msg)
+            return
+
+        # 16ab. Tabulación Cruzada / Pivot Tables: CROSSTAB
+        m_xtab = re.match(
+            r"^CROSSTAB\s+([A-Za-z_][A-Za-z0-9_]*)\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s+COLUMNS\s+([A-Za-z_][A-Za-z0-9_]*)\s+VALUES\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+AGGREGATE\s+(SUM|AVG|COUNT|MIN|MAX))?\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_xtab:
+            src_alias = m_xtab.group(1)
+            row_f = m_xtab.group(2)
+            col_f = m_xtab.group(3)
+            val_f = m_xtab.group(4)
+            agg_f = m_xtab.group(5) or "SUM"
+            into_al = m_xtab.group(6)
+            self.fn_crosstab(src_alias, row_f, col_f, val_f, agg_f, into_al)
             return
 
         # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]

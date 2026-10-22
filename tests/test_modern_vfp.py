@@ -824,6 +824,99 @@ WHERE total_ventas >= <<lnLimite>>
         rep = profiler.render_report()
         self.assertIn("FOXNEXT PROFILER REPORT", rep)
 
+    def test_fxp_bytecode_compilation_and_execution(self) -> None:
+        from modern_vfp.compiler import compile_file, load_compiled_program
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prg_file = Path(tmpdir) / "test_calc.prg"
+            fxp_file = Path(tmpdir) / "test_calc.fxp"
+            prg_file.write_text(
+                """
+                FUNCTION Multiplicar(a, b)
+                    RETURN a * b
+                ENDFUNC
+                lnResultadoFXP = Multiplicar(6, 7)
+                """,
+                encoding="utf-8",
+            )
+            compile_file(prg_file, fxp_file)
+            self.assertTrue(fxp_file.is_file())
+            info = load_compiled_program(fxp_file)
+            self.assertEqual(info["version"], "0.9.0")
+            self.assertIn("multiplicar", info["procedures"])
+
+            # Ejecutar con DO <archivo.fxp>
+            self.interp.execute(f"DO '{fxp_file}'")
+            self.assertEqual(self.interp.eval_expr("lnResultadoFXP"), 42)
+
+    def test_rushmore_indexed_query_optimization(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR empleados_rush (id I, depto C(10), sueldo I)
+            INSERT INTO empleados_rush VALUES (1, "IT", 3000)
+            INSERT INTO empleados_rush VALUES (2, "VENTAS", 2000)
+            INSERT INTO empleados_rush VALUES (3, "IT", 4000)
+            INSERT INTO empleados_rush VALUES (4, "RRHH", 2500)
+            INSERT INTO empleados_rush VALUES (5, "IT", 3500)
+
+            INDEX ON depto TAG tag_depto
+            lnTotalIT = 0
+            SCAN FOR depto == "IT"
+                lnTotalIT = lnTotalIT + 1
+            ENDSCAN
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnTotalIT"), 3)
+        opt_info = self.interp.rushmore.last_optimization
+        self.assertEqual(opt_info["level"], "Full")
+        self.assertEqual(opt_info["alias"], "empleados_rush")
+
+    def test_dbc_database_container(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dbc_path = Path(tmpdir) / "ventas_corp.dbc"
+            self.interp.execute(
+                f"""
+                CREATE DATABASE '{dbc_path}'
+                ADD TABLE clientes_db TO DATABASE
+                VALIDATE DATABASE
+                CLOSE DATABASES
+                """
+            )
+            self.assertTrue(dbc_path.is_file())
+            from modern_vfp.dbc import FoxDatabase
+
+            db = FoxDatabase.load(dbc_path)
+            self.assertIn("clientes_db", db.tables)
+            db.set_field_rule("clientes_db", "saldo", "saldo >= 0", "Saldo no puede ser negativo")
+            db.add_relation("clientes_db", "facturas_db", "id", "tag_cliente")
+            val_res = db.validate_database()
+            self.assertFalse(val_res["isValid"])  # facturas_db aún no agregada
+            db.add_table("facturas_db")
+            self.assertTrue(db.validate_database()["isValid"])
+
+    def test_parquet_columnar_export_and_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pq_file = Path(tmpdir) / "datos.parquet"
+            self.interp.execute(
+                f"""
+                CREATE CURSOR orig_pq (id I, producto C(25), precio N(10,2), activo L)
+                INSERT INTO orig_pq VALUES (1, "Laptop Pro", 1299.50, .T.)
+                INSERT INTO orig_pq VALUES (2, "Mouse USB", 25.00, .F.)
+
+                COPY TO '{pq_file}' TYPE PARQUET
+
+                CREATE CURSOR dest_pq (id I, producto C(25), precio N(10,2), activo L)
+                APPEND FROM '{pq_file}' TYPE PARQUET
+                lnDestRecs = RECCOUNT("dest_pq")
+                lcProd1 = dest_pq.producto
+                llActivo1 = dest_pq.activo
+                """
+            )
+            self.assertTrue(pq_file.is_file())
+            self.assertEqual(self.interp.eval_expr("lnDestRecs"), 2)
+            self.assertEqual(self.interp.eval_expr("lcProd1"), "Laptop Pro")
+            self.assertTrue(self.interp.eval_expr("llActivo1"))
+
 
 if __name__ == "__main__":
     unittest.main()

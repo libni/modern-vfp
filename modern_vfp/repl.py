@@ -263,6 +263,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(profile_file(args[1], interp))
         return 0
 
+    if args[0] == "--compile" and len(args) >= 2:
+        from .compiler import compile_file
+
+        out_fxp = args[2] if len(args) >= 3 else None
+        dest = compile_file(args[1], out_fxp)
+        print(f"[FoxCompiler] Compilado exitosamente a binario .fxp: {dest}")
+        return 0
+
     target_path = Path(args[0])
     if not target_path.exists():
         print(f"Error: El archivo '{target_path}' no existe.", file=sys.stderr)

@@ -345,6 +345,10 @@ class FoxInterpreter:
         self.functions["aerror"] = self.fn_aerror
         self.functions["__vfp_idx__"] = self._vfp_array_index
 
+        from .rushmore import RushmoreEngine
+        self.rushmore = RushmoreEngine()
+        self.active_dbc: Optional[Any] = None
+
         self.global_vars: Dict[str, Any] = {}
         self.call_stack: List[Dict[str, Any]] = []
         self._this_stack: List[VFPObject] = []
@@ -1031,7 +1035,14 @@ class FoxInterpreter:
                 if cur is None:
                     raise RuntimeError("SCAN ejecutado sin ningún cursor activo en el área de trabajo.")
                 scan_area = self.wam.current_area
-                vis_recnos = list(cur.visible_recnos(self.wam.set_deleted))
+                if for_expr:
+                    vis_recnos, opt_lvl = self.rushmore.optimize_filter(
+                        cur, for_expr, self.eval_expr, self.wam.set_deleted
+                    )
+                    if self.rushmore.report_level > 0:
+                        self.emit(f"Rushmore optimization: {opt_lvl} for '{for_expr}'")
+                else:
+                    vis_recnos = list(cur.visible_recnos(self.wam.set_deleted))
                 for r in vis_recnos:
                     self.wam.current_area = scan_area
                     cur.goto(r)
@@ -1608,7 +1619,7 @@ class FoxInterpreter:
             return
 
         m_copy = re.match(
-            r"^COPY\s+TO\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|FOX2X))?\s*$",
+            r"^COPY\s+TO\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|FOX2X|PARQUET))?\s*$",
             line,
             flags=re.IGNORECASE,
         )
@@ -1623,6 +1634,8 @@ class FoxInterpreter:
                     fmt = "CSV"
                 elif ext == ".json":
                     fmt = "JSON"
+                elif ext == ".parquet":
+                    fmt = "PARQUET"
                 else:
                     fmt = "DBF"
                     if not ext:
@@ -1637,13 +1650,16 @@ class FoxInterpreter:
                 export_csv(path, fdicts, vis_rows)
             elif fmt == "JSON":
                 export_json(path, vis_rows)
+            elif fmt == "PARQUET":
+                from .parquet import write_parquet
+                write_parquet(cur, path, self.wam.set_deleted)
             else:
                 write_dbf(path, fdicts, vis_rows, vis_dels)
             return
 
-        # 16b. APPEND FROM <archivo> [TYPE CSV|JSON|DBF]
+        # 16b. APPEND FROM <archivo> [TYPE CSV|JSON|DBF|PARQUET]
         m_app_from = re.match(
-            r"^APPEND\s+FROM\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF))?\s*$",
+            r"^APPEND\s+FROM\s+([^\s]+)(?:\s+TYPE\s+(CSV|JSON|DBF|PARQUET))?\s*$",
             line,
             flags=re.IGNORECASE,
         )
@@ -1658,6 +1674,8 @@ class FoxInterpreter:
                     fmt = "CSV"
                 elif ext == ".json":
                     fmt = "JSON"
+                elif ext == ".parquet":
+                    fmt = "PARQUET"
                 else:
                     fmt = "DBF"
                     if not ext:
@@ -1666,10 +1684,18 @@ class FoxInterpreter:
                 rows = import_csv(path)
             elif fmt == "JSON":
                 rows = import_json(path)
+            elif fmt == "PARQUET":
+                from .parquet import read_parquet
+                pq_cur = read_parquet(path)
+                for r in pq_cur.records:
+                    cur.append_dict(r)
+                cur.go_top(self.wam.set_deleted)
+                return
             else:
                 _, rows, _ = read_dbf(path)
             for r in rows:
                 cur.append_dict(r)
+            cur.go_top(self.wam.set_deleted)
             return
 
         # 16c. SQL Nativo: UPDATE <alias> SET col1 = expr1 [, col2 = expr2] [WHERE cond]
@@ -2129,7 +2155,54 @@ class FoxInterpreter:
                 return
             raise RuntimeError(self.last_error[1])
 
-        # 17. DO <procedimiento | archivo.prg> [WITH a, b]
+        # 16v. COMPILE <archivo.prg> [TO <archivo.fxp>]
+        m_compile = re.match(r"^COMPILE\s+([^\s]+)(?:\s+TO\s+([^\s]+))?\s*$", line, flags=re.IGNORECASE)
+        if m_compile:
+            from .compiler import compile_file
+
+            src_f = m_compile.group(1).strip("\"'")
+            out_f = m_compile.group(2).strip("\"'") if m_compile.group(2) else None
+            compile_file(src_f, out_f)
+            return
+
+        # 16w. Bases de Datos Contenedoras (.dbc)
+        m_create_db = re.match(r"^CREATE\s+DATABASE\s+([^\s]+)\s*$", line, flags=re.IGNORECASE)
+        if m_create_db:
+            from .dbc import FoxDatabase
+
+            dbname = m_create_db.group(1).strip("\"'")
+            self.active_dbc = FoxDatabase(dbname)
+            self.active_dbc.save()
+            return
+
+        m_open_db = re.match(r"^OPEN\s+DATABASE\s+([^\s]+)\s*$", line, flags=re.IGNORECASE)
+        if m_open_db:
+            from .dbc import FoxDatabase
+
+            dbname = m_open_db.group(1).strip("\"'")
+            self.active_dbc = FoxDatabase.load(dbname)
+            return
+
+        if re.match(r"^CLOSE\s+DATABASES?\b", line, flags=re.IGNORECASE):
+            self.active_dbc = None
+            return
+
+        m_add_tbl = re.match(r"^ADD\s+TABLE\s+([^\s]+)(?:\s+TO\s+DATABASE)?\s*$", line, flags=re.IGNORECASE)
+        if m_add_tbl:
+            if not self.active_dbc:
+                raise RuntimeError("No hay ninguna base de datos activa (DBC). Use OPEN DATABASE primero.")
+            tbl_name = m_add_tbl.group(1).strip("\"'")
+            self.active_dbc.add_table(tbl_name)
+            return
+
+        if re.match(r"^VALIDATE\s+DATABASE\b", line, flags=re.IGNORECASE):
+            if not self.active_dbc:
+                raise RuntimeError("No hay ninguna base de datos activa para validar.")
+            res = self.active_dbc.validate_database(self.eval_expr)
+            self.emit(f"Base de Datos '{res['database']}': {'Válida' if res['isValid'] else 'Con observaciones'}")
+            return
+
+        # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]
         m_do = re.match(r'^DO\s+([^\s]+)(?:\s+WITH\s+(.*))?$', line, flags=re.IGNORECASE)
         if m_do and not re.match(r"^DO\s+(?:WHILE|CASE|FORM)\b", line, flags=re.IGNORECASE):
             target = m_do.group(1).strip("\"'")
@@ -2141,6 +2214,14 @@ class FoxInterpreter:
                 params, body = self.procedures[tl]
                 self._invoke_Routine(params, body, args)
                 return
+
+            fxp_candidate = Path(target) if target.lower().endswith(".fxp") else Path(target).with_suffix(".fxp")
+            if fxp_candidate.is_file():
+                from .compiler import execute_compiled
+
+                execute_compiled(fxp_candidate, self)
+                return
+
             prg_path = Path(target)
             if not prg_path.suffix:
                 prg_path = prg_path.with_suffix(".prg")

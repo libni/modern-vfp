@@ -1168,6 +1168,101 @@ WHERE total_ventas >= <<lnLimite>>
         self.assertEqual(self.interp.eval_expr("lnTotal2"), 550.00)
 
 
+    def test_cdc_change_data_capture_and_audit_history(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR c_clientes (id I, nombre C(30), saldo N(10,2))
+            ENABLE AUDIT ON c_clientes
+            INSERT INTO c_clientes VALUES (1, "Distribuidora Alfa", 1000.00)
+            REPLACE saldo WITH 1250.00 FOR id = 1
+            DISABLE AUDIT ON c_clientes
+
+            =GETAUDITLOG("c_clientes", "audit_clientes")
+            lnTotalLogs = RECCOUNT("audit_clientes")
+            GO 1 IN audit_clientes
+            lcOp1 = audit_clientes.operation
+            GO 2 IN audit_clientes
+            lcOp2 = audit_clientes.operation
+            lcChanged2 = audit_clientes.changed
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnTotalLogs"), 2)
+        self.assertEqual(self.interp.eval_expr("lcOp1"), "INSERT")
+        self.assertEqual(self.interp.eval_expr("lcOp2"), "UPDATE")
+        self.assertIn("saldo", self.interp.eval_expr("lcChanged2"))
+
+    def test_financial_mathematics_suite(self) -> None:
+        self.interp.execute(
+            """
+            lnCuota = PAYMENT(0.05 / 12, 360, 200000)
+            lnValorPres = PV(0.05 / 12, 360, -1073.64)
+            lnValorFut = FV(0.05 / 12, 60, -200, -5000)
+            DIMENSION aFlujos[3]
+            aFlujos[1] = 100
+            aFlujos[2] = 200
+            aFlujos[3] = 300
+            lnVAN = NPV(0.10, aFlujos)
+
+            DIMENSION aTir[4]
+            aTir[1] = -1000
+            aTir[2] = 300
+            aTir[3] = 400
+            aTir[4] = 500
+            lnTIR = IRR(aTir)
+            """
+        )
+        self.assertAlmostEqual(self.interp.eval_expr("lnCuota"), -1073.64, delta=0.5)
+        self.assertAlmostEqual(self.interp.eval_expr("lnValorPres"), 200000.0, delta=50.0)
+        self.assertGreater(self.interp.eval_expr("lnValorFut"), 19000.0)
+        self.assertGreater(self.interp.eval_expr("lnVAN"), 450.0)
+        self.assertAlmostEqual(self.interp.eval_expr("lnTIR"), 0.089, delta=0.01)
+
+    def test_data_masking_and_privacy(self) -> None:
+        self.interp.execute(
+            """
+            lcEmailMask = MASKDATA("cliente.vip@banco.com", "EMAIL")
+            lcCardMask = MASKDATA("4532-1234-5678-9012", "CARD")
+            lcPhoneMask = MASKDATA("+1-555-839-2019", "PHONE")
+
+            CREATE CURSOR empleados_priv (id I, email C(40), tarjeta C(25))
+            INSERT INTO empleados_priv VALUES (1, "director@corporacion.com", "1111-2222-3333-4444")
+            MASK CURSOR empleados_priv FIELD email TYPE EMAIL
+            MASK CURSOR empleados_priv FIELD tarjeta TYPE CARD
+            GO 1 IN empleados_priv
+            lcEmailCur = empleados_priv.email
+            lcCardCur = empleados_priv.tarjeta
+            """
+        )
+        self.assertTrue(self.interp.eval_expr("lcEmailMask").startswith("c*"))
+        self.assertTrue(self.interp.eval_expr("lcEmailMask").endswith("p@banco.com"))
+        self.assertTrue(self.interp.eval_expr("lcCardMask").endswith("9012"))
+        self.assertTrue(self.interp.eval_expr("lcEmailCur").endswith("@corporacion.com"))
+        self.assertTrue(self.interp.eval_expr("lcCardCur").endswith("4444"))
+
+    def test_analytics_cursor_profiling_and_stats(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR inventario_analisis (id I, categoria C(20), precio N(10,2))
+            INSERT INTO inventario_analisis VALUES (1, "Servidores", 2500.00)
+            INSERT INTO inventario_analisis VALUES (2, "Servidores", 3500.00)
+            INSERT INTO inventario_analisis VALUES (3, "Accesorios", 50.00)
+
+            ANALYZE CURSOR inventario_analisis INTO CURSOR metricas_inv
+            lnCamposAnalizados = RECCOUNT("metricas_inv")
+            GO 3 IN metricas_inv
+            lcCampo3 = metricas_inv.field_name
+            lnAvg3 = metricas_inv.avg_value
+            lcMin3 = metricas_inv.min_value
+            lcMax3 = metricas_inv.max_value
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnCamposAnalizados"), 3)
+        self.assertEqual(self.interp.eval_expr("lcCampo3"), "precio")
+        self.assertAlmostEqual(self.interp.eval_expr("lnAvg3"), 2016.67, places=1)
+        self.assertEqual(self.interp.eval_expr("lcMin3"), "50.0")
+        self.assertEqual(self.interp.eval_expr("lcMax3"), "3500.0")
+
+
 if __name__ == "__main__":
     unittest.main()
 

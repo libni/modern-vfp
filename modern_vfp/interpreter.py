@@ -358,6 +358,14 @@ class FoxInterpreter:
         self.functions["ftsmatch"] = self.fn_ftsmatch
         self.functions["isvalidcursor"] = self.fn_isvalidcursor
         self.functions["crosstab"] = self.fn_crosstab
+        self.functions["payment"] = self.fn_payment
+        self.functions["pv"] = self.fn_pv
+        self.functions["fv"] = self.fn_fv
+        self.functions["npv"] = self.fn_npv
+        self.functions["irr"] = self.fn_irr
+        self.functions["maskdata"] = self.fn_maskdata
+        self.functions["getauditlog"] = self.fn_getauditlog
+        self.functions["analyzecursor"] = self.fn_analyzecursor
 
         self._orig_sys = self.functions.get("sys")
         self.functions["sys"] = self.fn_sys_enhanced
@@ -366,11 +374,13 @@ class FoxInterpreter:
         from .locks import LockManager
         from .eventbus import FoxEventBus
         from .fts import FullTextSearchEngine
+        from .cdc import ChangeDataCaptureManager
 
         self.rushmore = RushmoreEngine()
         self.locks = LockManager()
         self.event_bus = FoxEventBus()
         self.fts = FullTextSearchEngine()
+        self.cdc = ChangeDataCaptureManager()
         self.active_dbc: Optional[Any] = None
 
         self.global_vars: Dict[str, Any] = {}
@@ -613,6 +623,47 @@ class FoxInterpreter:
             set_deleted_on=self.wam.set_deleted,
         )
         self.wam.open_cursor_in_current_or_new(out_cur, in_free_area=True)
+        return True
+
+    def fn_payment(self, rate: Any, nper: Any, pv: Any, fv: Any = 0.0, type_: Any = 0) -> float:
+        from .financial import payment
+        return payment(float(rate), int(nper), float(pv), float(fv), int(type_))
+
+    def fn_pv(self, rate: Any, nper: Any, pmt: Any, fv: Any = 0.0, type_: Any = 0) -> float:
+        from .financial import pv
+        return pv(float(rate), int(nper), float(pmt), float(fv), int(type_))
+
+    def fn_fv(self, rate: Any, nper: Any, pmt: Any, pv: Any = 0.0, type_: Any = 0) -> float:
+        from .financial import fv
+        return fv(float(rate), int(nper), float(pmt), float(pv), int(type_))
+
+    def fn_npv(self, rate: Any, cash_flows: Any) -> float:
+        from .financial import npv
+        cfs = cash_flows if isinstance(cash_flows, (list, tuple)) else [float(cash_flows)]
+        return npv(float(rate), [float(x) for x in cfs])
+
+    def fn_irr(self, cash_flows: Any) -> float:
+        from .financial import irr
+        cfs = cash_flows if isinstance(cash_flows, (list, tuple)) else [float(cash_flows)]
+        return irr([float(x) for x in cfs])
+
+    def fn_maskdata(self, val: Any, mask_type: str = "EMAIL") -> str:
+        from .masking import mask_value
+        return mask_value(val, str(mask_type))
+
+    def fn_getauditlog(self, alias: Optional[Any] = None, into_alias: str = "audit_log") -> bool:
+        al = str(alias).lower().strip() if alias is not None else None
+        cur = self.cdc.create_audit_cursor(al, into_alias)
+        self.wam.open_cursor_in_current_or_new(cur, in_free_area=True)
+        return True
+
+    def fn_analyzecursor(self, alias: str, into_alias: str = "cursor_stats") -> bool:
+        from .analytics import analyze_cursor
+        cur = self.wam.get_cursor(str(alias).lower().strip())
+        if not cur:
+            raise RuntimeError(f"No existe el cursor '{alias}'.")
+        stats_cur = analyze_cursor(cur, into_alias=str(into_alias), set_deleted_on=self.wam.set_deleted)
+        self.wam.open_cursor_in_current_or_new(stats_cur, in_free_area=True)
         return True
 
     @staticmethod
@@ -1552,7 +1603,8 @@ class FoxInterpreter:
             schema_str = m_cc.group(2)
             fields = parse_schema_string(schema_str)
             cur = Cursor(alias, fields)
-            self.wam.open_cursor_in_current_or_new(cur, in_free_area=False)
+            in_free = self.wam.current_cursor() is not None
+            self.wam.open_cursor_in_current_or_new(cur, in_free_area=in_free)
             return
 
         # 5. SQL Nativo: SELECT ... FROM ... [INTO CURSOR alias]
@@ -1634,6 +1686,8 @@ class FoxInterpreter:
                 cols = [f.name for f in cur.fields]
             data = {cols[idx]: vals[idx] for idx in range(min(len(cols), len(vals)))}
             cur.append_dict(data)
+            if self.cdc.is_monitored(alias):
+                self.cdc.record_change(alias, cur.reccount(), "INSERT", old_data=None, new_data=dict(data))
             return
 
         # 11. REPLACE [ALL] f1 WITH v1 [, f2 WITH v2] [FOR cond] [IN alias]
@@ -2551,6 +2605,53 @@ class FoxInterpreter:
             self.fn_crosstab(src_alias, row_f, col_f, val_f, agg_f, into_al)
             return
 
+        # 16ac. Captura de Cambios y Auditoría (CDC): ENABLE/DISABLE AUDIT
+        m_en_audit = re.match(
+            r"^ENABLE\s+AUDIT\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+TO\s+FILE\s+([^\s]+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_en_audit:
+            al = m_en_audit.group(1).lower()
+            to_f = m_en_audit.group(2).strip("\"'") if m_en_audit.group(2) else None
+            self.cdc.enable(al, to_f)
+            return
+
+        m_dis_audit = re.match(r"^DISABLE\s+AUDIT\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s*$", line, flags=re.IGNORECASE)
+        if m_dis_audit:
+            al = m_dis_audit.group(1).lower()
+            self.cdc.disable(al)
+            return
+
+        # 16ad. Enmascaramiento y Privacidad de Datos: MASK CURSOR
+        m_mask = re.match(
+            r"^MASK\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*)\s+FIELD\s+([A-Za-z_][A-Za-z0-9_]*)\s+TYPE\s+(EMAIL|CARD|CREDITCARD|PHONE|SSN|ID|DNI|CUSTOM)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_mask:
+            al = m_mask.group(1).lower()
+            fn = m_mask.group(2)
+            mt = m_mask.group(3)
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            from .masking import mask_cursor_field
+            mask_cursor_field(cur, fn, mt, set_deleted_on=self.wam.set_deleted)
+            return
+
+        # 16ae. Perfilado y Análisis Estadístico: ANALYZE CURSOR
+        m_ana = re.match(
+            r"^ANALYZE\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_ana:
+            al = m_ana.group(1).lower()
+            into_al = (m_ana.group(2) or "cursor_stats").lower()
+            self.fn_analyzecursor(al, into_al)
+            return
+
         # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]
         m_do = re.match(r'^DO\s+([^\s]+)(?:\s+WITH\s+(.*))?$', line, flags=re.IGNORECASE)
         if m_do and not re.match(r"^DO\s+(?:WHILE|CASE|FORM)\b", line, flags=re.IGNORECASE):
@@ -2644,6 +2745,14 @@ class FoxInterpreter:
             fname = m_with.group(1).split(".")[-1]
             pairs.append((fname, m_with.group(2).strip()))
 
+        def _apply_pairs(rn: int) -> None:
+            old_data = dict(cur.records[rn - 1]) if self.cdc.is_monitored(cur.alias) else None
+            for fname, vexpr in pairs:
+                cur.set_field(fname, self.eval_expr(vexpr))
+            if old_data is not None:
+                new_data = dict(cur.records[rn - 1])
+                self.cdc.record_change(cur.alias, rn, "UPDATE", old_data, new_data)
+
         if is_all or for_expr:
             saved_area = self.wam.current_area
             self.wam.select_area(cur.alias)
@@ -2651,13 +2760,11 @@ class FoxInterpreter:
                 for r in list(cur.visible_recnos(self.wam.set_deleted)):
                     cur.goto(r)
                     if for_expr is None or bool(self.eval_expr(for_expr)):
-                        for fname, vexpr in pairs:
-                            cur.set_field(fname, self.eval_expr(vexpr))
+                        _apply_pairs(r)
             finally:
                 self.wam.current_area = saved_area
         else:
-            for fname, vexpr in pairs:
-                cur.set_field(fname, self.eval_expr(vexpr))
+            _apply_pairs(cur.recno())
 
     def _eval_print_list(self, expr_list_str: str) -> str:
         parts = self._split_top_level(expr_list_str, ",")

@@ -1,25 +1,42 @@
-# FoxNext (`modern-vfp`) v1.2.0
+# FoxNext (`modern-vfp`) v1.3.0
 
-> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), generación de ejecutables autónomos (`BUILD EXE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), hojas de cálculo nativas Microsoft Excel OpenXML (`COPY TO ... TYPE XLSX` / `APPEND FROM`), tabulación cruzada dinámica xBase (`CROSSTAB` / `_GENXTAB`), suite criptográfica y seguridad (`SYS(2007)`, `HASH`, `HMAC`, `ENCRYPT`, `DECRYPT`), motor de búsqueda textual Full-Text (`CREATE FULLTEXT INDEX`, `FULLTEXT SEARCH`, `FTSMATCH`), validación formal de contratos y esquemas JSON (`VALIDATE CURSOR`, `ISVALIDCURSOR`), concurrencia y bloqueos multiusuario (`RLOCK` / `FLOCK` / `UNLOCK` / `SET MULTILOCKS`), bus reactivo de eventos (`PUBLISH EVENT` / `SUBSCRIBE EVENT`), algoritmos de coincidencia fonética (`SOUNDEX` / `DIFFERENCE`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`), generador de binarios autónomos (`BUILD EXE`), suite ERP empresarial y entorno visual **FoxNext Studio**.
+> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), generación de ejecutables autónomos (`BUILD EXE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), hojas de cálculo nativas Microsoft Excel OpenXML (`COPY TO ... TYPE XLSX` / `APPEND FROM`), captura de cambios y auditoría (`ENABLE AUDIT` / `GETAUDITLOG`), matemáticas financieras y actuariales (`PAYMENT`, `PV`, `FV`, `NPV`, `IRR`), enmascaramiento y privacidad de datos (`MASK CURSOR` / `MASKDATA`), perfilado estadístico de cursores (`ANALYZE CURSOR`), tabulación cruzada dinámica xBase (`CROSSTAB` / `_GENXTAB`), suite criptográfica y seguridad (`SYS(2007)`, `HASH`, `HMAC`, `ENCRYPT`, `DECRYPT`), motor de búsqueda textual Full-Text (`CREATE FULLTEXT INDEX`, `FULLTEXT SEARCH`, `FTSMATCH`), validación formal de contratos y esquemas JSON (`VALIDATE CURSOR`, `ISVALIDCURSOR`), concurrencia y bloqueos multiusuario (`RLOCK` / `FLOCK` / `UNLOCK` / `SET MULTILOCKS`), bus reactivo de eventos (`PUBLISH EVENT` / `SUBSCRIBE EVENT`), algoritmos de coincidencia fonética (`SOUNDEX` / `DIFFERENCE`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`), generador de binarios autónomos (`BUILD EXE`), suite ERP empresarial y entorno visual **FoxNext Studio**.
 
 ---
 
-## Características Implementadas (v1.2.0)
+## Características Implementadas (v1.3.0)
 
-1. **Criptografía, Hashing y Seguridad xBase (`modern_vfp/crypto.py`):**
+1. **Captura de Cambios y Pistas de Auditoría CDC (`modern_vfp/cdc.py`):**
+   - Rastreo automático y transparente de mutaciones (`INSERT`, `UPDATE`, `DELETE`, `RECALL`) en cursores activos mediante `ChangeDataCaptureManager`.
+   - Comandos de activación y destino: `ENABLE AUDIT ON <alias> [TO FILE <archivo.jsonl>]` y `DISABLE AUDIT ON <alias>`.
+   - Generación de cursores de auditoría y telemetría histórica: `GETAUDITLOG([cAlias [, cCursorDestino]])` registrando marcas de tiempo, operación, números de registro, campos alterados y valores anteriores/posteriores.
+2. **Suite de Matemáticas Financieras y Actuariales (`modern_vfp/financial.py`):**
+   - Cálculo de cuotas y préstamos constantes: `PAYMENT(nRate, nPeriods, nPrincipal [, nFutureValue [, nType]])` (función PMT).
+   - Valor Actual y Valor Futuro: `PV(nRate, nPeriods, nPayment [, nFV [, nType]])` y `FV(nRate, nPeriods, nPayment [, nPV [, nType]])`.
+   - Evaluación de proyectos de inversión: `NPV(nRate, aFlujosEfectivo)` (Valor Presente Neto) y `IRR(aFlujosEfectivo)` (Tasa Interna de Retorno mediante Newton-Raphson).
+3. **Enmascaramiento y Privacidad de Datos (`modern_vfp/masking.py`):**
+   - Protección y ofuscación de datos sensibles para cumplimiento normativo (GDPR, HIPAA, PCI-DSS):
+     - Correos: `MASKDATA("juan.perez@empresa.com", "EMAIL")` -> `j*********z@empresa.com`.
+     - Tarjetas de crédito: `MASKDATA("4532-1234-5678-9012", "CARD")` -> `****-****-****-9012`.
+     - Teléfonos y documentos: formatos `PHONE`, `SSN`, `DNI`, `ID` y `CUSTOM`.
+   - Transformación directa sobre cursores: `MASK CURSOR <alias> FIELD <campo> TYPE (EMAIL|CARD|PHONE|SSN|CUSTOM)`.
+4. **Perfilado y Diagnóstico Estadístico de Datos (`modern_vfp/analytics.py`):**
+   - Análisis descriptivo integral de cursores en memoria: `ANALYZE CURSOR <alias> [INTO CURSOR <stats_alias>]`.
+   - Genera métricas por columna: cantidad de registros no nulos, nulos, cardinalidad única (distincts), valores mínimos, máximos, promedios aritméticos y desviación estándar muestral.
+5. **Criptografía, Hashing y Seguridad xBase (`modern_vfp/crypto.py`):**
    - Compatibilidad Visual FoxPro `SYS(2007, cExp [, nFlags])`: cálculo de Checksum / CRC-32 determinista en formato de cadena.
    - Resúmenes criptográficos con `HASH(cExp, [cAlgoritmo])` (soporta SHA-256, MD5, SHA-512, SHA-1).
    - Firmas digitales HMAC para APIs y webhooks: `HMAC(cMensaje, cClave, [cAlgoritmo])`.
    - Cifrado simétrico reversible con keystream pseudoaleatorio SHA-256 y empaquetado seguro Base64: `ENCRYPT(cTexto, cClave)` y `DECRYPT(cEncriptado, cClave)`.
-2. **Motor de Búsqueda Full-Text (FTS) en Memoria (`modern_vfp/fts.py`):**
+6. **Motor de Búsqueda Full-Text (FTS) en Memoria (`modern_vfp/fts.py`):**
    - Creación de índices invertidos textuales: `CREATE FULLTEXT INDEX ON <alias> (<campo1> [, <campo2>])`.
    - Consultas con cálculo de relevancia TF-IDF: `FULLTEXT SEARCH <cQuery> IN <alias> [INTO CURSOR <resultado>]`.
    - Funciones en expresiones: `FTSSEARCH(cAlias, cQuery)` (lista de registros ordenados) y predicado `FTSMATCH(cAlias, cQuery)` para filtros `FOR` / `WHERE`.
-3. **Validación de Contratos y Esquemas JSON (`modern_vfp/schema_validator.py`):**
+7. **Validación de Contratos y Esquemas JSON (`modern_vfp/schema_validator.py`):**
    - Verificación de integridad de datos contra especificaciones estándar JSON Schema (tipos, campos `required`, rangos numéricos `minimum` / `maximum`, restricciones de longitud `minLength` / `maxLength`, expresiones regulares `pattern` y listas `enum`).
    - Comando directo: `VALIDATE CURSOR <alias> AGAINST SCHEMA <cJsonOrFile>`.
    - Función booleana con diagnóstico detallado: `ISVALIDCURSOR(cAlias, cJsonOrFile [, laMatrizErrores])`.
-4. **Tabulación Cruzada y Tablas Dinámicas (`modern_vfp/crosstab.py`):**
+8. **Tabulación Cruzada y Tablas Dinámicas (`modern_vfp/crosstab.py`):**
    - Motor de transformación pivote inspirado en la utilidad clásica `_GENXTAB` / `VFPXTAB` de Visual FoxPro.
    - Comando nativo: `CROSSTAB <source_alias> ON <row_field> COLUMNS <col_field> VALUES <val_field> [AGGREGATE SUM|AVG|COUNT|MIN|MAX] INTO CURSOR <target_alias>`.
    - Generación dinámica de columnas sanitizadas y columna `TOTAL` acumulativa.
@@ -94,7 +111,7 @@ python3 -m modern_vfp --transpile examples/demo_ventas.prg
 # 6. Publicar un programa .prg y sus cursores como Microservicio REST JSON
 python3 -m modern_vfp --api examples/demo_ventas.prg 8766
 
-# 7. Ejecutar las 48 suites de pruebas integrales
+# 7. Ejecutar las 52 suites de pruebas integrales
 python3 -m unittest discover -s tests -v
 ```
 

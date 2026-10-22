@@ -58,8 +58,9 @@ class FoxReport:
                     key = col.get("name") or f"col_{idx}"
                     row_data[key] = self.interp.eval_expr(col["expr"])
                 for idx, s_item in enumerate(self.summary_items):
-                    skey = f"__sum_{idx}__"
-                    row_data[skey] = self.interp.eval_expr(s_item["expr"])
+                    if isinstance(s_item, dict) and "expr" in s_item:
+                        skey = f"__sum_{idx}__"
+                        row_data[skey] = self.interp.eval_expr(s_item["expr"])
                 evaluated_rows.append(row_data)
         finally:
             self.interp.wam.current_area = saved_area

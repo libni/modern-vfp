@@ -74,6 +74,73 @@ class FoxProject:
         out_p.write_text(json.dumps(app_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return out_p
 
+    def build_exe(self, output_path: str | Path) -> Path:
+        """
+        Genera un ejecutable autónomo autocontenido (`BUILD EXE`) con shebang ejecutable
+        y bootstrap integrado que puede ejecutarse directamente en la terminal sin configuración previa.
+        """
+        app_file = self.build_app(Path(output_path).with_suffix(".foxapp"))
+        app_json = app_file.read_text(encoding="utf-8")
+
+        out_exe = Path(output_path)
+        runner_content = f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+# Payload empaquetado por FoxNext BUILD EXE
+APP_DATA = json.loads({repr(app_json)})
+
+def main():
+    try:
+        from modern_vfp.interpreter import FoxInterpreter
+        interp = FoxInterpreter()
+        main_key = APP_DATA["foxapp"]["main"]
+        assets = APP_DATA["foxapp"]["assets"]
+        if main_key not in assets:
+            print(f"Error: Punto de entrada '{{main_key}}' no encontrado.", file=sys.stderr)
+            sys.exit(1)
+        interp.execute(assets[main_key])
+    except Exception as exc:
+        print(f"[FoxNext Runtime Error]: {{exc}}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+"""
+        out_exe.write_text(runner_content, encoding="utf-8")
+        try:
+            out_exe.chmod(0o755)
+        except OSError:
+            pass
+        return out_exe
+
+
+def build_standalone_exe(source_or_project_path: str | Path, output_path: Optional[str | Path] = None) -> Path:
+    """
+    Construye un ejecutable autónomo a partir de un archivo .prg individual o un manifiesto .foxproj.
+    """
+    p = Path(source_or_project_path)
+    if p.suffix.lower() == ".foxproj":
+        proj = FoxProject.from_file(p)
+        target = Path(output_path) if output_path else p.with_suffix("")
+        return proj.build_exe(target)
+
+    # Si es un archivo .prg
+    target = Path(output_path) if output_path else p.with_suffix("")
+    spec = {
+        "project": {
+            "name": p.stem,
+            "version": "1.0.0",
+            "main": p.name,
+            "programs": [],
+            "forms": [],
+            "reports": [],
+        }
+    }
+    proj = FoxProject(spec, base_dir=p.parent)
+    return proj.build_exe(target)
+
 
 def run_foxapp(app_path: str | Path, interpreter: Any) -> Any:
     """

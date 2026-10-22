@@ -195,6 +195,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"[FoxProject] Aplicación empaquetada exitosamente en: {out}")
         return 0
 
+    if args[0] == "--build-exe" and len(args) >= 2:
+        from .project import build_standalone_exe
+
+        out_exe = args[2] if len(args) >= 3 else None
+        dest = build_standalone_exe(args[1], out_exe)
+        print(f"[FoxProject] Ejecutable autónomo generado exitosamente en: {dest}")
+        return 0
+
     if args[0] == "--check" and len(args) >= 2:
         from .lsp import analyze_fox_source
 

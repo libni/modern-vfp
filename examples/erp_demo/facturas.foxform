@@ -1,0 +1,43 @@
+{
+  "form": {
+    "name": "frmFacturas",
+    "caption": "FoxNext ERP - Gestión de Facturación Electrónica",
+    "width": 78,
+    "height": 20,
+    "init": "? 'Inicializando Formulario de Facturación...'",
+    "controls": [
+      {
+        "type": "Label",
+        "name": "lblTitulo",
+        "caption": "MÓDULO DE FACTURACIÓN Y CUENTAS POR COBRAR (64-BIT)",
+        "row": 1,
+        "col": 4
+      },
+      {
+        "type": "TextBox",
+        "name": "txtFiltroEstado",
+        "value": "PENDIENTE",
+        "row": 3,
+        "col": 18
+      },
+      {
+        "type": "Grid",
+        "name": "grdFacturas",
+        "alias": "facturas",
+        "columns": ["folio", "cliente_id", "total", "estado"],
+        "row": 5,
+        "col": 2,
+        "width": 74,
+        "height": 8
+      },
+      {
+        "type": "CommandButton",
+        "name": "btnCalcular",
+        "caption": "Calcular Total",
+        "row": 15,
+        "col": 25,
+        "click": "CALCULATE SUM(total) FOR estado == 'PENDIENTE' TO lnTotalPend\n? 'Total Pendiente: ' + TRANSFORM(lnTotalPend)"
+      }
+    ]
+  }
+}

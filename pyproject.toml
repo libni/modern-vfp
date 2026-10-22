@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modern-vfp"
+version = "1.0.0"
+description = "Modern 64-bit Data-Centric RAD Language and Runtime inspired by Visual FoxPro"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "FoxNext Project", email = "libni@users.noreply.github.com" }
+]
+keywords = [
+    "foxpro",
+    "vfp",
+    "visual foxpro",
+    "xbase",
+    "dbf",
+    "cursor",
+    "rad",
+    "database",
+    "parquet",
+    "data-centric"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Interpreters",
+    "Topic :: Software Development :: Compilers"
+]
+dependencies = []
+
+[project.optional-dependencies]
+arrow = ["pyarrow>=10.0.0"]
+
+[project.scripts]
+foxnext = "modern_vfp.repl:main"
+modern-vfp = "modern_vfp.repl:main"
+
+[project.urls]
+Homepage = "https://github.com/libni/modern-vfp"
+Repository = "https://github.com/libni/modern-vfp.git"
+Issues = "https://github.com/libni/modern-vfp/issues"

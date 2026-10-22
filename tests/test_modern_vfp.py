@@ -917,6 +917,52 @@ WHERE total_ventas >= <<lnLimite>>
             self.assertEqual(self.interp.eval_expr("lcProd1"), "Laptop Pro")
             self.assertTrue(self.interp.eval_expr("llActivo1"))
 
+    def test_build_standalone_exe_and_project_exe(self) -> None:
+        from modern_vfp.project import build_standalone_exe
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_prg = Path(tmpdir) / "app_calculo.prg"
+            out_exe = Path(tmpdir) / "app_calculo_bin"
+            src_prg.write_text(
+                """
+                x = 100
+                y = 250
+                z = x + y
+                ? 'Calculado: ' + TRANSFORM(z)
+                """,
+                encoding="utf-8",
+            )
+            built = build_standalone_exe(src_prg, out_exe)
+            self.assertTrue(built.is_file())
+            content = built.read_text(encoding="utf-8")
+            self.assertIn("#!/usr/bin/env python3", content)
+            self.assertIn("FoxInterpreter", content)
+
+    def test_erp_demo_suite_integration(self) -> None:
+        erp_dir = Path(__file__).parent.parent / "examples" / "erp_demo"
+        schema_prg = erp_dir / "schema.prg"
+        main_prg = erp_dir / "main.prg"
+        self.assertTrue(schema_prg.is_file())
+        self.assertTrue(main_prg.is_file())
+
+        # Ejecutar la suite de demostración completa
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = Path.cwd()
+            try:
+                import os
+
+                os.chdir(tmpdir)
+                demo_interp = self.interp
+                # Copiar assets
+                for f in erp_dir.iterdir():
+                    if f.is_file():
+                        (Path(tmpdir) / f.name).write_bytes(f.read_bytes())
+                demo_interp.execute((Path(tmpdir) / "main.prg").read_text(encoding="utf-8"))
+                self.assertEqual(demo_interp.eval_expr("lnPendientesRush"), 2)
+                self.assertTrue((Path(tmpdir) / "facturas_export.parquet").is_file())
+            finally:
+                os.chdir(orig_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

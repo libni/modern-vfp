@@ -1946,6 +1946,21 @@ class FoxInterpreter:
             self.emit(f"[FoxProject] Aplicación empaquetada en '{built_path}'")
             return
 
+        # 16l2. BUILD EXE <salida> FROM <proyecto.foxproj | programa.prg>
+        m_build_exe = re.match(
+            r"^BUILD\s+EXE\s+([^\s]+)\s+FROM\s+([^\s]+)\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_build_exe:
+            from .project import build_standalone_exe
+
+            exe_out = m_build_exe.group(1).strip("\"'")
+            src_in = m_build_exe.group(2).strip("\"'")
+            built_path = build_standalone_exe(src_in, exe_out)
+            self.emit(f"[FoxProject] Ejecutable autónomo generado en '{built_path}'")
+            return
+
         # 16m. DIMENSION / DECLARE laArr[n] o laMat[r, c]
         m_dim = re.match(r"^(?:DIMENSION|DECLARE)\s+(.*)$", line, flags=re.IGNORECASE)
         if m_dim:

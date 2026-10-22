@@ -1,0 +1,68 @@
+{
+  "report": {
+    "name": "rptFacturasERP",
+    "title": "REPORTE DE VENTAS Y FACTURACIÓN FISCAL",
+    "subtitle": "FoxNext ERP Enterprise Edition (64-bit)",
+    "alias": "facturas",
+    "columns": [
+      {
+        "name": "folio",
+        "label": "Folio",
+        "expr": "folio",
+        "width": 8,
+        "align": "right"
+      },
+      {
+        "name": "cliente_id",
+        "label": "Cliente ID",
+        "expr": "cliente_id",
+        "width": 12,
+        "align": "right"
+      },
+      {
+        "name": "subtotal",
+        "label": "Subtotal",
+        "expr": "subtotal",
+        "width": 14,
+        "align": "right",
+        "format": "$999,999.99"
+      },
+      {
+        "name": "iva",
+        "label": "IVA",
+        "expr": "iva",
+        "width": 12,
+        "align": "right",
+        "format": "$999,999.99"
+      },
+      {
+        "name": "total",
+        "label": "Total",
+        "expr": "total",
+        "width": 14,
+        "align": "right",
+        "format": "$999,999.99"
+      },
+      {
+        "name": "estado",
+        "label": "Estado",
+        "expr": "estado",
+        "width": 12,
+        "align": "left"
+      }
+    ],
+    "summary": [
+      {
+        "label": "Total de Facturas Emitidas",
+        "expr": "folio",
+        "op": "COUNT"
+      },
+      {
+        "label": "Total Facturado Bruto",
+        "expr": "total",
+        "op": "SUM",
+        "format": "$999,999.99"
+      }
+    ]
+  }
+}

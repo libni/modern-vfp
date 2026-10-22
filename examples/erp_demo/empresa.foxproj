@@ -1,0 +1,10 @@
+{
+  "project": {
+    "name": "FoxNext_ERP_Enterprise",
+    "version": "1.0.0",
+    "main": "main.prg",
+    "programs": ["schema.prg"],
+    "forms": ["facturas.foxform"],
+    "reports": ["facturas.foxreport"]
+  }
+}

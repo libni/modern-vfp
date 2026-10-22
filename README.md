@@ -1,10 +1,10 @@
-# FoxNext (`modern-vfp`) v0.9.0
+# FoxNext (`modern-vfp`) v1.0.0
 
-> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`) y entorno visual **FoxNext Studio**.
+> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), generación de ejecutables autónomos (`BUILD EXE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`), generador de binarios autónomos (`BUILD EXE`), suite ERP empresarial y entorno visual **FoxNext Studio**.
 
 ---
 
-## Características Implementadas (v0.9.0)
+## Características Implementadas (v1.0.0 Milestone)
 
 1. **Optimización Rushmore, Cursores 64-bit y Bases de Datos `.dbc` (`modern_vfp/rushmore.py`, `modern_vfp/dbc.py`, `modern_vfp/cursor.py`):**
    - Tecnología de optimización Rushmore (`RushmoreEngine`): evaluación ultraveloz de filtros `FOR <condicion>` mediante conjuntos e intersecciones de índices (`INDEX ON ... TAG ...`), soporte para niveles `Full`, `Partial` y `None`, y telemetría `SYS(3054)`.
@@ -21,8 +21,9 @@
    - Modificación SQL directa sobre cursores: `UPDATE <alias> SET <campo> = <expr> WHERE <cond>` y `DELETE FROM <alias> WHERE <cond>`.
    - Conectividad SQL Pass-Through: `SQLCONNECT()`, `SQLSTRINGCONNECT()`, `SQLEXEC(nHandle, cSQL, cCursor)` (con parámetros `?variable`) y `SQLDISCONNECT()`.
    - Conversión directa Cursor $\leftrightarrow$ JSON y REST: `CURSORTOJSON([alias])`, `JSONTOCURSOR(lcJson, alias)`, `HTTPGET(url)`, `HTTPPOST(url, body)`.
-3. **Compilador Bytecode `.fxp`, Lenguaje xBase, Manejo de Errores y +90 Funciones (`modern_vfp/compiler.py`, `modern_vfp/interpreter.py`):**
+3. **Compilador Bytecode `.fxp`, Ejecutables Autónomos (`BUILD EXE`), Lenguaje xBase y +90 Funciones:**
    - Compilador binario pre-tokenizado (`.fxp`): `COMPILE <archivo.prg> [TO <archivo.fxp>]` y ejecución de binarios pre-compilados con `DO <archivo.fxp>`.
+   - Generación de ejecutables autónomos de 64 bits: `BUILD EXE <salida> FROM <proyecto.foxproj | programa.prg>` y CLI `--build-exe`.
    - Manejador global de errores: `ON ERROR [comando]`, disparo de errores con `ERROR <expr>`, lectura de código y mensaje con `ERROR()` / `MESSAGE()` y volcado diagnóstico a matriz con `AERROR(laInfoError)`.
    - Clases orientadas a objetos con herencia multinivel (`DEFINE CLASS Sub AS Super`), invocación a superclase con `DODEFAULT(...)`, reflexión con `ADDPROPERTY()` / `PEMSTATUS()`, y delegación reactiva de eventos con `BINDEVENT()`, `RAISEEVENT()` y `UNBINDEVENTS()`.
    - Arreglos 1-based (`DIMENSION` / `DECLARE`, `ALEN()`, `ASCAN()`, `ASORT()`, `ADIR()`) y clase nativa `CREATEOBJECT("Collection")`.
@@ -30,7 +31,8 @@
    - Bloques `TEXT TO <lcVar> [ADDITIVE] [TEXTMERGE] [NOSHOW] ... ENDTEXT` con interpolación `<<expresion>>`, `ASSERT <cond> [MESSAGE <msg>]` y sustitución de macros `&lcVar`.
 4. **Formularios RAD (`.foxform`), Menús (`.foxmenu` / `DEFINE MENU`) y Motor de Reportes por Bandas (`.foxreport`):**
    - `DO FORM <archivo.foxform> [TO FILE <salida.html>]`, `REPORT FORM <archivo.foxreport> [FOR <cond>] [TO FILE <salida.txt | .html>]` y menús interactivos con `DEFINE MENU`, `DEFINE PAD`, `DEFINE POPUP`, `DEFINE BAR`, `ON SELECTION BAR` y `ACTIVATE POPUP`.
-5. **Tooling Moderno: Compilador (`--compile`), Profiler (`--profile`), DocGen (`--doc`), Depurador (`--debug`), Transpilador Python (`--transpile`), LSP (`--check`), Microservicios REST (`--api`), Migrador VFP 9 y Empaquetador:**
+5. **Tooling Moderno: Empaquetador EXE (`--build-exe`), Compilador (`--compile`), Profiler (`--profile`), DocGen (`--doc`), Depurador (`--debug`), Transpilador Python (`--transpile`), LSP (`--check`), Microservicios REST (`--api`), Migrador VFP 9 y Empaquetador:**
+   - Generador de binarios autónomos (`--build-exe <in.prg|.foxproj> [out_exe]`).
    - Compilador binario xBase (`--compile <archivo.prg> [salida.fxp]`).
    - Perfilador de rendimiento por línea, hotspots y cobertura (`--profile <archivo.prg>`).
    - Generador de documentación técnica Markdown (`--doc <archivo.prg> [salida.md]`).
@@ -51,8 +53,9 @@ python3 -m modern_vfp
 # 2. Iniciar el Entorno Visual FoxNext Studio (http://127.0.0.1:8765)
 python3 -m modern_vfp --studio
 
-# 3. Compilar un programa a binario bytecode .fxp
+# 3. Compilar a binario bytecode .fxp o generar ejecutable autónomo
 python3 -m modern_vfp --compile examples/demo_ventas.prg
+python3 -m modern_vfp --build-exe examples/erp_demo/empresa.foxproj erp_app
 
 # 4. Analizar estáticamente, depurar, perfilar o documentar un programa .prg
 python3 -m modern_vfp --check examples/demo_ventas.prg
@@ -66,7 +69,7 @@ python3 -m modern_vfp --transpile examples/demo_ventas.prg
 # 6. Publicar un programa .prg y sus cursores como Microservicio REST JSON
 python3 -m modern_vfp --api examples/demo_ventas.prg 8766
 
-# 7. Ejecutar las 38 suites de pruebas integrales
+# 7. Ejecutar las 40 suites de pruebas integrales
 python3 -m unittest discover -s tests -v
 ```
 

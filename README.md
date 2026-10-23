@@ -1,24 +1,41 @@
-# FoxNext (`modern-vfp`) v1.4.0
+# FoxNext (`modern-vfp`) v1.5.0
 
-> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), generación de ejecutables autónomos (`BUILD EXE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), hojas de cálculo nativas Microsoft Excel OpenXML (`COPY TO ... TYPE XLSX` / `APPEND FROM`), caché en memoria con TTL y LRU (`CACHE_SET` / `CACHE_GET`), motor de plantillas y generador de documentos (`RENDER TEMPLATE`), limitador de tasa y throttling para APIs (`THROTTLE` / `RATELIMIT_CHECK`), reconciliación y diff de datos (`DIFF CURSOR`), captura de cambios y auditoría (`ENABLE AUDIT` / `GETAUDITLOG`), matemáticas financieras y actuariales (`PAYMENT`, `PV`, `FV`, `NPV`, `IRR`), enmascaramiento y privacidad de datos (`MASK CURSOR` / `MASKDATA`), perfilado estadístico de cursores (`ANALYZE CURSOR`), tabulación cruzada dinámica xBase (`CROSSTAB` / `_GENXTAB`), suite criptográfica y seguridad (`SYS(2007)`, `HASH`, `HMAC`, `ENCRYPT`, `DECRYPT`), motor de búsqueda textual Full-Text (`CREATE FULLTEXT INDEX`, `FULLTEXT SEARCH`, `FTSMATCH`), validación formal de contratos y esquemas JSON (`VALIDATE CURSOR`, `ISVALIDCURSOR`), concurrencia y bloqueos multiusuario (`RLOCK` / `FLOCK` / `UNLOCK` / `SET MULTILOCKS`), bus reactivo de eventos (`PUBLISH EVENT` / `SUBSCRIBE EVENT`), algoritmos de coincidencia fonética (`SOUNDEX` / `DIFFERENCE`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`), generador de binarios autónomos (`BUILD EXE`), suite ERP empresarial y entorno visual **FoxNext Studio**.
+> Entorno y lenguaje **Data-Centric RAD de 64 bits** inspirado en **Microsoft Visual FoxPro**, con motor de cursores en memoria, tecnología de optimización de búsquedas indexadas **Rushmore** (`SYS(3054)`), compilador de bytecode binario pre-tokenizado (`.fxp` / `COMPILE`), generación de ejecutables autónomos (`BUILD EXE`), contenedores de bases de datos relacionales (`.dbc` / `CREATE DATABASE` / `VALIDATE DATABASE`), exportador e importador columnar Parquet (`COPY TO ... TYPE PARQUET`), hojas de cálculo nativas Microsoft Excel OpenXML (`COPY TO ... TYPE XLSX` / `APPEND FROM`), cálculos geoespaciales y geocercas (`GEODISTANCE` / `GEOINPOLYGON` / `FILTER GEORADIUS`), planificador de tareas y cron en memoria (`SCHEDULE TASK` / `RUN PENDING TASKS`), recorrido jerárquico y árboles BOM (`EXPLODE TREE` / `TREEPATH`), álgebra matricial y regresión lineal (`MMULT` / `LINEST`), caché en memoria con TTL y LRU (`CACHE_SET` / `CACHE_GET`), motor de plantillas y generador de documentos (`RENDER TEMPLATE`), limitador de tasa y throttling para APIs (`THROTTLE` / `RATELIMIT_CHECK`), reconciliación y diff de datos (`DIFF CURSOR`), captura de cambios y auditoría (`ENABLE AUDIT` / `GETAUDITLOG`), matemáticas financieras y actuariales (`PAYMENT`, `PV`, `FV`, `NPV`, `IRR`), enmascaramiento y privacidad de datos (`MASK CURSOR` / `MASKDATA`), perfilado estadístico de cursores (`ANALYZE CURSOR`), tabulación cruzada dinámica xBase (`CROSSTAB` / `_GENXTAB`), suite criptográfica y seguridad (`SYS(2007)`, `HASH`, `HMAC`, `ENCRYPT`, `DECRYPT`), motor de búsqueda textual Full-Text (`CREATE FULLTEXT INDEX`, `FULLTEXT SEARCH`, `FTSMATCH`), validación formal de contratos y esquemas JSON (`VALIDATE CURSOR`, `ISVALIDCURSOR`), concurrencia y bloqueos multiusuario (`RLOCK` / `FLOCK` / `UNLOCK` / `SET MULTILOCKS`), bus reactivo de eventos (`PUBLISH EVENT` / `SUBSCRIBE EVENT`), algoritmos de coincidencia fonética (`SOUNDEX` / `DIFFERENCE`), evolución dinámica de esquemas (`ALTER TABLE`), adaptador de datos OOP (`CursorAdapter`), vistas SQL parametrizadas (`CREATE SQL VIEW` / `REQUERY()`), SQL relacional nativo (`SELECT / UPDATE / DELETE`), conectividad SQL Pass-Through (`SQLCONNECT / SQLEXEC`), transacciones multinivel (`BEGIN TRANSACTION / ROLLBACK`), intercambio `SCATTER / GATHER`, serialización XML y JSON (`CURSORTOXML`, `XMLTOCURSOR`, `CURSORTOJSON`, `JSONTOCURSOR`), manejador global de errores (`ON ERROR`, `ERROR`, `AERROR()`), arreglos y colecciones (`DIMENSION`, `COPY TO ARRAY`, `ADIR()`, `Collection`), bloques `TEXT ... ENDTEXT`, compatibilidad binaria `.dbf` (UTF-8), orientación a objetos con herencia multinivel (`DEFINE CLASS`, `DODEFAULT()`, `BINDEVENT()`, `RAISEEVENT()`), formularios declarativos (`.foxform`), menús empresariales (`.foxmenu` / `DEFINE MENU`), motor de reportes por bandas (`.foxreport`), migrador de legado VFP 9 (`vfp2modern`), analizador LSP (`--check`), perfilador de rendimiento y cobertura (`--profile`), depurador y trazador (`--debug`), transpilador `.prg` a Python (`.py`) (`--transpile`), generador de documentación (`--doc`), servidor de microservicios REST (`--api`), empaquetador de proyectos (`BUILD APP`), generador de binarios autónomos (`BUILD EXE`), suite ERP empresarial y entorno visual **FoxNext Studio**.
 
 ---
 
-## Características Implementadas (v1.4.0)
+## Características Implementadas (v1.5.0)
 
-1. **Caché en Memoria con TTL y Evicción LRU (`modern_vfp/cache.py`):**
+1. **Motor Geoespacial y Geocercas (`modern_vfp/geo.py`):**
+   - Distancia geodésica ortodrómica de alta precisión mediante la fórmula de Haversine: `GEODISTANCE(lat1, lon1, lat2, lon2 [, "KM"|"MILES"])`.
+   - Evaluación de geocercas poligonales cerradas (Ray-Casting): `GEOINPOLYGON(lat, lon, aPuntosPoligono)`.
+   - Verificación de cajas delimitadoras: `GEOINBOUNDS(lat, lon, minLat, minLon, maxLat, maxLon)`.
+   - Filtro de radio territorial sobre cursores: `FILTER GEORADIUS ON <alias> LAT <col_lat> LON <col_lon> CENTER <lat>, <lon> RADIUS <dist> [KM|MILES] [INTO CURSOR <res>]`.
+2. **Planificador de Tareas y Cron en Memoria (`modern_vfp/cron.py`):**
+   - Programación declarativa de rutinas y mantenimiento recurrente: `SCHEDULE TASK <nombre> EVERY <n> (SECONDS|MINUTES|HOURS) DO <comando>`.
+   - Control del ciclo de vida: `CANCEL TASK <nombre>` y ejecución forzada con `RUN PENDING TASKS`.
+   - Diagnóstico y estado de ejecución en cursores: `TASKSTATUS([cNombreTarea [, cCursorDestino]])`.
+3. **Recorrido Jerárquico de Estructuras y Árboles (BOM) (`modern_vfp/graph.py`):**
+   - Explotación de grafos y árboles de recursión ilimitada (planes contables, organigramas, listas de materiales de producción):
+     `EXPLODE TREE <alias> PARENT <col_padre> CHILD <col_hijo> [ROOT <raiz>] [INTO CURSOR <res>]`.
+   - Columnas analíticas generadas: profundidad (`depth`), ruta jerárquica (`tree_path`) y estado terminal (`is_leaf`).
+   - Funciones auxiliares: `TREEPATH(cAlias, cColPadre, cColHijo, eNodo)` y `TREECHILDREN(cAlias, cColPadre, cColHijo, eNodo [, lRecursivo])`.
+4. **Álgebra Matricial y Modelado Predictivo (`modern_vfp/matrix.py`):**
+   - Operaciones de álgebra lineal para análisis cuantitativo: multiplicación de matrices `MMULT()`, transposición `MTRANSPOSE()` y producto escalar `VDOT()`.
+   - Regresión lineal simple por mínimos cuadrados ordinarios: `LINEST(aValoresY, aValoresX)` retornando pendiente, ordenada al origen y coeficiente de determinación ($R^2$).
+5. **Caché en Memoria con TTL y Evicción LRU (`modern_vfp/cache.py`):**
    - Almacenamiento clave-valor de alto rendimiento para resultados de consultas, configuraciones y sesiones.
    - Expiración temporal granular por clave y desalojo inteligente LRU cuando se alcanza la capacidad máxima.
    - Funciones nativas xBase: `CACHE_SET(cClave, eValor [, nTTL])`, `CACHE_GET(cClave [, eDefecto])`, `CACHE_HAS(cClave)`, `CACHE_DELETE(cClave)`, `CACHE_CLEAR()` y `CACHE_STATS()`.
-2. **Motor de Plantillas y Generador de Documentos (`modern_vfp/templates.py`):**
+6. **Motor de Plantillas y Generador de Documentos (`modern_vfp/templates.py`):**
    - Renderizador declarativo para correos, facturas HTML, contratos y reportes estructurados.
    - Sintaxis moderna con interpolación `{{ variable }}`, filtros (`{{ precio | currency }}`, `{{ nombre | upper }}`), condicionales `{% if cond %} ... {% endif %}` y bucles sobre cursores o listas `{% for row in cursor_alias %} ... {% endfor %}`.
    - Comando directo: `RENDER TEMPLATE <archivo|string> [WITH <alias|dict>] [TO FILE <salida>]` y función `RENDERTEMPLATE()`.
-3. **Limitación de Tasa y Regulación de Tráfico (`modern_vfp/ratelimit.py`):**
+7. **Limitación de Tasa y Regulación de Tráfico (`modern_vfp/ratelimit.py`):**
    - Motor de regulación mediante ventana deslizante para microservicios REST (`--api`) y procesos batch.
    - Comando de protección: `THROTTLE <cliente> LIMIT <n> PER <segundos> [ERROR <mensaje>]`.
    - Funciones programáticas: `RATELIMIT_CHECK(cCliente, nLimite, nVentana)`, `RATELIMIT_REMAINING()` y `RATELIMIT_RESET()`.
-4. **Comparación y Reconciliación de Datos (Cursor Diff) (`modern_vfp/diff.py`):**
+8. **Comparación y Reconciliación de Datos (Cursor Diff) (`modern_vfp/diff.py`):**
    - Análisis de diferencias entre dos versiones de un cursor o tabla basado en una clave primaria común.
    - Comando nativo: `DIFF CURSOR <alias1> WITH <alias2> KEY <campo_clave> [INTO CURSOR <diff_alias>]`.
    - Clasificación por registro en estados formales: `ADDED` (incorporado), `DELETED` (eliminado), `MODIFIED` (alterado, con lista de campos divergentes) e `IDENTICAL`.
@@ -127,7 +144,7 @@ python3 -m modern_vfp --transpile examples/demo_ventas.prg
 # 6. Publicar un programa .prg y sus cursores como Microservicio REST JSON
 python3 -m modern_vfp --api examples/demo_ventas.prg 8766
 
-# 7. Ejecutar las 56 suites de pruebas integrales
+# 7. Ejecutar las 60 suites de pruebas integrales
 python3 -m unittest discover -s tests -v
 ```
 

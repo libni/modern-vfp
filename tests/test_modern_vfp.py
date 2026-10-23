@@ -8,6 +8,7 @@ APPEND FROM, DBF binario, OOP, .foxform, .foxreport, migrador .scx, .foxproj/.fo
 
 from __future__ import annotations
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1369,6 +1370,112 @@ WHERE total_ventas >= <<lnLimite>>
         self.assertEqual(statuses["2"][0], "IDENTICAL")
         self.assertEqual(statuses["3"][0], "DELETED")
         self.assertEqual(statuses["4"][0], "ADDED")
+
+
+    def test_geospatial_haversine_and_geofencing(self) -> None:
+        self.interp.execute(
+            """
+            lnDistNYC_LA = GEODISTANCE(40.7128, -74.0060, 34.0522, -118.2437, "KM")
+
+            DIMENSION aZona[4, 2]
+            aZona[1, 1] = 10.0
+            aZona[1, 2] = 10.0
+            aZona[2, 1] = 10.0
+            aZona[2, 2] = 20.0
+            aZona[3, 1] = 20.0
+            aZona[3, 2] = 20.0
+            aZona[4, 1] = 20.0
+            aZona[4, 2] = 10.0
+
+            llDentro = GEOINPOLYGON(15.0, 15.0, aZona)
+            llFuera = GEOINPOLYGON(25.0, 25.0, aZona)
+
+            CREATE CURSOR sucursales_geo (id I, nombre C(25), lat N(10,4), lon N(10,4))
+            INSERT INTO sucursales_geo VALUES (1, "Sucursal Centro", 40.7128, -74.0060)
+            INSERT INTO sucursales_geo VALUES (2, "Sucursal Brooklyn", 40.6782, -73.9442)
+            INSERT INTO sucursales_geo VALUES (3, "Sucursal Filadelfia", 39.9526, -75.1652)
+
+            FILTER GEORADIUS ON sucursales_geo LAT lat LON lon CENTER 40.7128, -74.0060 RADIUS 20 KM INTO CURSOR sucursales_cercanas
+            lnCercanas = RECCOUNT("sucursales_cercanas")
+            """
+        )
+        self.assertAlmostEqual(self.interp.eval_expr("lnDistNYC_LA"), 3935.0, delta=20.0)
+        self.assertTrue(self.interp.eval_expr("llDentro"))
+        self.assertFalse(self.interp.eval_expr("llFuera"))
+        self.assertEqual(self.interp.eval_expr("lnCercanas"), 2)
+
+    def test_cron_task_scheduler_in_memory(self) -> None:
+        self.interp.execute(
+            """
+            nContadorTareas = 0
+            SCHEDULE TASK "tarea_tick" EVERY 10 SECONDS DO nContadorTareas = nContadorTareas + 1
+            """
+        )
+        # Forzar vencimiento inmediato para probar ejecución síncrona
+        self.interp.cron._tasks["tarea_tick"].next_run_epoch = time.time() - 1
+        self.interp.execute("RUN PENDING TASKS")
+        self.assertEqual(self.interp.eval_expr("nContadorTareas"), 1)
+
+        self.interp.execute(
+            """
+            =TASKSTATUS("tarea_tick", "cur_sched")
+            lnTotalTareas = RECCOUNT("cur_sched")
+            CANCEL TASK "tarea_tick"
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnTotalTareas"), 1)
+        self.assertNotIn("tarea_tick", self.interp.cron._tasks)
+
+    def test_graph_tree_hierarchical_bom_traversal(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR plan_cuentas (id I, parent_id I, nombre C(30))
+            INSERT INTO plan_cuentas VALUES (1, 0, "Activo")
+            INSERT INTO plan_cuentas VALUES (11, 1, "Activo Corriente")
+            INSERT INTO plan_cuentas VALUES (111, 11, "Caja y Bancos")
+            INSERT INTO plan_cuentas VALUES (2, 0, "Pasivo")
+
+            EXPLODE TREE plan_cuentas PARENT parent_id CHILD id INTO CURSOR arbol_cuentas
+            lnTotalNodos = RECCOUNT("arbol_cuentas")
+            GO 3 IN arbol_cuentas
+            lnProfundidad3 = arbol_cuentas.depth
+            lcRuta3 = arbol_cuentas.tree_path
+            llEsHoja3 = arbol_cuentas.is_leaf
+
+            lcRutaDirecta = TREEPATH("plan_cuentas", "parent_id", "id", 111)
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnTotalNodos"), 4)
+        self.assertEqual(self.interp.eval_expr("lnProfundidad3"), 3)
+        self.assertEqual(self.interp.eval_expr("lcRuta3"), "/1/11/111")
+        self.assertTrue(self.interp.eval_expr("llEsHoja3"))
+        self.assertEqual(self.interp.eval_expr("lcRutaDirecta"), "/1/11/111")
+
+    def test_matrix_math_and_linear_regression(self) -> None:
+        self.interp.set_var("aMatA", [[1.0, 2.0], [3.0, 4.0]])
+        self.interp.set_var("aMatB", [[2.0, 0.0], [1.0, 2.0]])
+        self.interp.set_var("aVec1", [1.0, 2.0, 3.0])
+        self.interp.set_var("aVec2", [4.0, 5.0, 6.0])
+        self.interp.set_var("aY", [2.0, 4.0, 6.0, 8.0, 10.0])
+        self.interp.set_var("aX", [1.0, 2.0, 3.0, 4.0, 5.0])
+
+        self.interp.execute(
+            """
+            =MMULT(aMatA, aMatB, "aResMult")
+            =MTRANSPOSE(aMatA, "aResTrans")
+            lnDot = VDOT(aVec1, aVec2)
+            loReg = LINEST(aY, aX)
+            """
+        )
+        res_mult = self.interp.eval_expr("aResMult")
+        self.assertEqual(res_mult, [[4.0, 4.0], [10.0, 8.0]])
+        res_trans = self.interp.eval_expr("aResTrans")
+        self.assertEqual(res_trans, [[1.0, 3.0], [2.0, 4.0]])
+        self.assertEqual(self.interp.eval_expr("lnDot"), 32.0)
+        reg = self.interp.eval_expr("loReg")
+        self.assertEqual(reg["slope"], 2.0)
+        self.assertEqual(reg["intercept"], 0.0)
+        self.assertEqual(reg["r_squared"], 1.0)
 
 
 if __name__ == "__main__":

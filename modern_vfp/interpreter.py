@@ -377,6 +377,16 @@ class FoxInterpreter:
         self.functions["ratelimit_remaining"] = self.fn_ratelimit_remaining
         self.functions["ratelimit_reset"] = self.fn_ratelimit_reset
         self.functions["diffcursors"] = self.fn_diffcursors
+        self.functions["geodistance"] = self.fn_geodistance
+        self.functions["geoinpolygon"] = self.fn_geoinpolygon
+        self.functions["geoinbounds"] = self.fn_geoinbounds
+        self.functions["taskstatus"] = self.fn_taskstatus
+        self.functions["treepath"] = self.fn_treepath
+        self.functions["treechildren"] = self.fn_treechildren
+        self.functions["mmult"] = self.fn_mmult
+        self.functions["mtranspose"] = self.fn_mtranspose
+        self.functions["vdot"] = self.fn_vdot
+        self.functions["linest"] = self.fn_linest
 
         self._orig_sys = self.functions.get("sys")
         self.functions["sys"] = self.fn_sys_enhanced
@@ -388,6 +398,7 @@ class FoxInterpreter:
         from .cdc import ChangeDataCaptureManager
         from .cache import FoxCache
         from .ratelimit import RateLimiter
+        from .cron import TaskScheduler
 
         self.rushmore = RushmoreEngine()
         self.locks = LockManager()
@@ -396,6 +407,7 @@ class FoxInterpreter:
         self.cdc = ChangeDataCaptureManager()
         self.cache = FoxCache()
         self.rate_limiter = RateLimiter()
+        self.cron = TaskScheduler()
         self.active_dbc: Optional[Any] = None
 
         self.global_vars: Dict[str, Any] = {}
@@ -747,6 +759,60 @@ class FoxInterpreter:
         diff_cur = diff_cursors(c1, c2, str(key_field), into_alias=str(into_alias), set_deleted_on=self.wam.set_deleted)
         self.wam.open_cursor_in_current_or_new(diff_cur, in_free_area=True)
         return True
+
+    def fn_geodistance(self, lat1: Any, lon1: Any, lat2: Any, lon2: Any, unit: str = "KM") -> float:
+        from .geo import geodistance
+        return geodistance(float(lat1), float(lon1), float(lat2), float(lon2), str(unit))
+
+    def fn_geoinpolygon(self, lat: Any, lon: Any, polygon_points: Any) -> bool:
+        from .geo import geoinpolygon
+        return geoinpolygon(float(lat), float(lon), polygon_points)
+
+    def fn_geoinbounds(self, lat: Any, lon: Any, min_lat: Any, min_lon: Any, max_lat: Any, max_lon: Any) -> bool:
+        from .geo import geoinbounds
+        return geoinbounds(float(lat), float(lon), float(min_lat), float(min_lon), float(max_lat), float(max_lon))
+
+    def fn_taskstatus(self, task_name: Optional[Any] = None, into_alias: str = "tasks_status") -> bool:
+        tname = str(task_name).lower().strip() if task_name else None
+        cur = self.cron.to_cursor(tname, into_alias)
+        self.wam.open_cursor_in_current_or_new(cur, in_free_area=True)
+        return True
+
+    def fn_treepath(self, alias: str, parent_col: str, child_col: str, node_val: Any) -> str:
+        from .graph import get_tree_path
+        cur = self.wam.get_cursor(str(alias).lower().strip())
+        if not cur:
+            raise RuntimeError(f"No existe el cursor '{alias}'.")
+        return get_tree_path(cur, str(parent_col), str(child_col), node_val, self.wam.set_deleted)
+
+    def fn_treechildren(self, alias: str, parent_col: str, child_col: str, node_val: Any, recursive: bool = True) -> List[Any]:
+        from .graph import get_tree_children
+        cur = self.wam.get_cursor(str(alias).lower().strip())
+        if not cur:
+            raise RuntimeError(f"No existe el cursor '{alias}'.")
+        return get_tree_children(cur, str(parent_col), str(child_col), node_val, bool(recursive), self.wam.set_deleted)
+
+    def fn_mmult(self, mat_a: Any, mat_b: Any, out_arr_name: Optional[str] = None) -> List[List[float]]:
+        from .matrix import mmult
+        res = mmult(mat_a, mat_b)
+        if out_arr_name:
+            self.set_var(out_arr_name, res)
+        return res
+
+    def fn_mtranspose(self, mat: Any, out_arr_name: Optional[str] = None) -> List[List[float]]:
+        from .matrix import mtranspose
+        res = mtranspose(mat)
+        if out_arr_name:
+            self.set_var(out_arr_name, res)
+        return res
+
+    def fn_vdot(self, vec1: Any, vec2: Any) -> float:
+        from .matrix import vdot
+        return vdot(vec1, vec2)
+
+    def fn_linest(self, y_vals: Any, x_vals: Any) -> Dict[str, float]:
+        from .matrix import linest
+        return linest(y_vals, x_vals)
 
     @staticmethod
     def _vfp_array_index(arr: Any, idx1: Any, idx2: Any = None) -> Any:
@@ -2779,6 +2845,77 @@ class FoxInterpreter:
             key_f = m_diff.group(3)
             into_al = (m_diff.group(4) or "diff_result").lower()
             self.fn_diffcursors(al1, al2, key_f, into_al)
+            return
+
+        # 16ai. Filtro Geoespacial de Radio: FILTER GEORADIUS
+        m_georad = re.match(
+            r"^FILTER\s+GEORADIUS\s+ON\s+([A-Za-z_][A-Za-z0-9_]*)\s+LAT\s+([A-Za-z_][A-Za-z0-9_]*)\s+LON\s+([A-Za-z_][A-Za-z0-9_]*)\s+CENTER\s+(.+?),\s*(.+?)\s+RADIUS\s+(.+?)(?:\s+(KM|MILES))?(?:\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_georad:
+            al = m_georad.group(1).lower()
+            lat_c = m_georad.group(2)
+            lon_c = m_georad.group(3)
+            c_lat = float(self.eval_expr(m_georad.group(4)))
+            c_lon = float(self.eval_expr(m_georad.group(5)))
+            rad = float(self.eval_expr(m_georad.group(6)))
+            u = (m_georad.group(7) or "KM").upper()
+            into_al = (m_georad.group(8) or f"{al}_georad").lower()
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            from .geo import filter_georadius
+            out_c = filter_georadius(cur, lat_c, lon_c, c_lat, c_lon, rad, u, into_al, self.wam.set_deleted)
+            self.wam.open_cursor_in_current_or_new(out_c, in_free_area=True)
+            return
+
+        # 16aj. Planificador y Tareas Recurrentes: SCHEDULE TASK / CANCEL TASK / RUN PENDING TASKS
+        m_sched = re.match(
+            r"^SCHEDULE\s+TASK\s+([A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\"|'[^']+')\s+EVERY\s+(\d+(?:\.\d+)?)\s+(SECONDS|MINUTES|HOURS)\s+DO\s+(.+)$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_sched:
+            tname = m_sched.group(1).strip("\"'").lower()
+            num_val = float(m_sched.group(2))
+            unit_str = m_sched.group(3).upper()
+            cmd_target = m_sched.group(4).strip()
+            mult = 1.0
+            if unit_str == "MINUTES":
+                mult = 60.0
+            elif unit_str == "HOURS":
+                mult = 3600.0
+            self.cron.schedule(tname, num_val * mult, cmd_target)
+            return
+
+        m_cancel_t = re.match(r"^CANCEL\s+TASK\s+([A-Za-z_][A-Za-z0-9_]*|\"[^\"]+\"|'[^']+')\s*$", line, flags=re.IGNORECASE)
+        if m_cancel_t:
+            self.cron.cancel(m_cancel_t.group(1).strip("\"'").lower())
+            return
+
+        if re.match(r"^RUN\s+PENDING\s+TASKS\b", line, flags=re.IGNORECASE):
+            self.cron.run_pending(self)
+            return
+
+        # 16ak. Recorrido Jerárquico de Estructuras y Árboles (BOM): EXPLODE TREE
+        m_tree = re.match(
+            r"^EXPLODE\s+TREE\s+([A-Za-z_][A-Za-z0-9_]*)\s+PARENT\s+([A-Za-z_][A-Za-z0-9_]*)\s+CHILD\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+ROOT\s+(.+?))?(?:\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_tree:
+            al = m_tree.group(1).lower()
+            p_col = m_tree.group(2)
+            c_col = m_tree.group(3)
+            r_val = self.eval_expr(m_tree.group(4).strip()) if m_tree.group(4) else None
+            into_al = (m_tree.group(5) or f"{al}_tree").lower()
+            cur = self.wam.get_cursor(al)
+            if not cur:
+                raise RuntimeError(f"No existe el cursor '{al}'.")
+            from .graph import explode_tree
+            out_c = explode_tree(cur, p_col, c_col, r_val, into_al, self.wam.set_deleted)
+            self.wam.open_cursor_in_current_or_new(out_c, in_free_area=True)
             return
 
         # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]

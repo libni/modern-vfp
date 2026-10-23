@@ -366,6 +366,17 @@ class FoxInterpreter:
         self.functions["maskdata"] = self.fn_maskdata
         self.functions["getauditlog"] = self.fn_getauditlog
         self.functions["analyzecursor"] = self.fn_analyzecursor
+        self.functions["cache_set"] = self.fn_cache_set
+        self.functions["cache_get"] = self.fn_cache_get
+        self.functions["cache_has"] = self.fn_cache_has
+        self.functions["cache_delete"] = self.fn_cache_delete
+        self.functions["cache_clear"] = self.fn_cache_clear
+        self.functions["cache_stats"] = self.fn_cache_stats
+        self.functions["rendertemplate"] = self.fn_rendertemplate
+        self.functions["ratelimit_check"] = self.fn_ratelimit_check
+        self.functions["ratelimit_remaining"] = self.fn_ratelimit_remaining
+        self.functions["ratelimit_reset"] = self.fn_ratelimit_reset
+        self.functions["diffcursors"] = self.fn_diffcursors
 
         self._orig_sys = self.functions.get("sys")
         self.functions["sys"] = self.fn_sys_enhanced
@@ -375,12 +386,16 @@ class FoxInterpreter:
         from .eventbus import FoxEventBus
         from .fts import FullTextSearchEngine
         from .cdc import ChangeDataCaptureManager
+        from .cache import FoxCache
+        from .ratelimit import RateLimiter
 
         self.rushmore = RushmoreEngine()
         self.locks = LockManager()
         self.event_bus = FoxEventBus()
         self.fts = FullTextSearchEngine()
         self.cdc = ChangeDataCaptureManager()
+        self.cache = FoxCache()
+        self.rate_limiter = RateLimiter()
         self.active_dbc: Optional[Any] = None
 
         self.global_vars: Dict[str, Any] = {}
@@ -664,6 +679,73 @@ class FoxInterpreter:
             raise RuntimeError(f"No existe el cursor '{alias}'.")
         stats_cur = analyze_cursor(cur, into_alias=str(into_alias), set_deleted_on=self.wam.set_deleted)
         self.wam.open_cursor_in_current_or_new(stats_cur, in_free_area=True)
+        return True
+
+    def fn_cache_set(self, key: str, value: Any, ttl_seconds: Optional[Any] = None) -> bool:
+        ttl = float(ttl_seconds) if ttl_seconds is not None else None
+        self.cache.set(str(key), value, ttl)
+        return True
+
+    def fn_cache_get(self, key: str, default: Any = None) -> Any:
+        return self.cache.get(str(key), default)
+
+    def fn_cache_has(self, key: str) -> bool:
+        return self.cache.has(str(key))
+
+    def fn_cache_delete(self, key: str) -> bool:
+        return self.cache.delete(str(key))
+
+    def fn_cache_clear(self) -> bool:
+        self.cache.clear()
+        return True
+
+    def fn_cache_stats(self) -> Dict[str, Any]:
+        return self.cache.stats()
+
+    def fn_rendertemplate(self, template_text_or_path: str, context_or_alias: Optional[Any] = None) -> str:
+        from .templates import render_template
+        s = str(template_text_or_path)
+        if len(s) < 1024 and Path(s).is_file():
+            text = Path(s).read_text(encoding="utf-8")
+        else:
+            text = s
+
+        ctx: Dict[str, Any] = dict(self.current_vars())
+        if context_or_alias is not None:
+            if isinstance(context_or_alias, dict):
+                ctx.update(context_or_alias)
+            elif isinstance(context_or_alias, str):
+                cur = self.wam.get_cursor(context_or_alias.lower().strip())
+                if cur:
+                    ctx[context_or_alias.lower().strip()] = cur
+        return render_template(text, ctx, self.eval_expr)
+
+    def fn_ratelimit_check(self, client_key: str, max_requests: Any, window_seconds: Any) -> bool:
+        return self.rate_limiter.check(str(client_key), int(max_requests), float(window_seconds))
+
+    def fn_ratelimit_remaining(self, client_key: str, max_requests: Any, window_seconds: Any) -> int:
+        return self.rate_limiter.remaining(str(client_key), int(max_requests), float(window_seconds))
+
+    def fn_ratelimit_reset(self, client_key: Optional[str] = None) -> bool:
+        self.rate_limiter.reset(str(client_key) if client_key else None)
+        return True
+
+    def fn_diffcursors(
+        self,
+        alias1: str,
+        alias2: str,
+        key_field: str,
+        into_alias: str = "diff_result",
+    ) -> bool:
+        from .diff import diff_cursors
+        c1 = self.wam.get_cursor(str(alias1).lower().strip())
+        c2 = self.wam.get_cursor(str(alias2).lower().strip())
+        if not c1:
+            raise RuntimeError(f"No existe el cursor '{alias1}'.")
+        if not c2:
+            raise RuntimeError(f"No existe el cursor '{alias2}'.")
+        diff_cur = diff_cursors(c1, c2, str(key_field), into_alias=str(into_alias), set_deleted_on=self.wam.set_deleted)
+        self.wam.open_cursor_in_current_or_new(diff_cur, in_free_area=True)
         return True
 
     @staticmethod
@@ -2650,6 +2732,53 @@ class FoxInterpreter:
             al = m_ana.group(1).lower()
             into_al = (m_ana.group(2) or "cursor_stats").lower()
             self.fn_analyzecursor(al, into_al)
+            return
+
+        # 16af. Motor de Plantillas y Documentos: RENDER TEMPLATE
+        m_rend = re.match(
+            r"^RENDER\s+TEMPLATE\s+(.+?)(?:\s+WITH\s+([A-Za-z_][A-Za-z0-9_]*))?(?:\s+TO\s+FILE\s+([^\s]+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_rend and not re.match(r"^RENDER\s*\(", line, flags=re.IGNORECASE):
+            tmpl_src = self.eval_expr(m_rend.group(1).strip())
+            with_al = m_rend.group(2)
+            to_f = m_rend.group(3).strip("\"'") if m_rend.group(3) else None
+            rendered = self.fn_rendertemplate(tmpl_src, with_al)
+            if to_f:
+                Path(to_f).write_text(rendered, encoding="utf-8")
+            else:
+                self.emit(rendered)
+            return
+
+        # 16ag. Regulación y Rate Limiting: THROTTLE
+        m_throt = re.match(
+            r"^THROTTLE\s+(.+?)\s+LIMIT\s+(\d+)\s+PER\s+(\d+)(?:\s+ERROR\s+(.+))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_throt:
+            client_id = str(self.eval_expr(m_throt.group(1).strip()))
+            limit_n = int(m_throt.group(2))
+            per_sec = int(m_throt.group(3))
+            err_msg = str(self.eval_expr(m_throt.group(4).strip())) if m_throt.group(4) else f"Tasa de peticiones excedida para '{client_id}'."
+            if not self.rate_limiter.check(client_id, limit_n, per_sec):
+                self.last_error = (429, err_msg, line)
+                raise RuntimeError(err_msg)
+            return
+
+        # 16ah. Comparación y Reconciliación: DIFF CURSOR
+        m_diff = re.match(
+            r"^DIFF\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*)\s+WITH\s+([A-Za-z_][A-Za-z0-9_]*)\s+KEY\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+INTO\s+CURSOR\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$",
+            line,
+            flags=re.IGNORECASE,
+        )
+        if m_diff:
+            al1 = m_diff.group(1).lower()
+            al2 = m_diff.group(2).lower()
+            key_f = m_diff.group(3)
+            into_al = (m_diff.group(4) or "diff_result").lower()
+            self.fn_diffcursors(al1, al2, key_f, into_al)
             return
 
         # 17. DO <procedimiento | archivo.prg | archivo.fxp> [WITH a, b]

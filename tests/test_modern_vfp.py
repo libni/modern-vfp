@@ -1263,6 +1263,114 @@ WHERE total_ventas >= <<lnLimite>>
         self.assertEqual(self.interp.eval_expr("lcMax3"), "3500.0")
 
 
+    def test_in_memory_cache_with_ttl_and_lru(self) -> None:
+        self.interp.execute(
+            """
+            =CACHE_SET("token_acceso", "TK-998877", 60)
+            lcToken = CACHE_GET("token_acceso")
+            llExiste = CACHE_HAS("token_acceso")
+            =CACHE_DELETE("token_acceso")
+            llExisteDespues = CACHE_HAS("token_acceso")
+            =CACHE_SET("expira_inmediato", "Temporal", 0.001)
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lcToken"), "TK-998877")
+        self.assertTrue(self.interp.eval_expr("llExiste"))
+        self.assertFalse(self.interp.eval_expr("llExisteDespues"))
+        import time
+
+        time.sleep(0.01)
+        self.interp.execute('lcExp = CACHE_GET("expira_inmediato", "EXPIRADO")')
+        self.assertEqual(self.interp.eval_expr("lcExp"), "EXPIRADO")
+        stats = self.interp.cache.stats()
+        self.assertIn("hits", stats)
+        self.assertIn("misses", stats)
+
+    def test_template_engine_document_generator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_file = Path(tmpdir) / "factura.html"
+            template_code = """
+<h1>Factura {{ nro_factura }}</h1>
+{% if cliente_vip %}
+<p>Estado: CLIENTE PREFERENCIAL</p>
+{% endif %}
+<ul>
+{% for item in items_factura %}
+<li>{{ item.producto | upper }} - Cant: {{ item.cantidad }} - Precio: {{ item.precio | currency }}</li>
+{% endfor %}
+</ul>
+"""
+            self.interp.set_var("lcTmpl", template_code)
+            self.interp.execute(
+                f"""
+                nro_factura = "FACT-2026-001"
+                cliente_vip = .T.
+                CREATE CURSOR items_factura (producto C(25), cantidad I, precio N(10,2))
+                INSERT INTO items_factura VALUES ("Laptop Gamer", 1, 1450.00)
+                INSERT INTO items_factura VALUES ("Mouse Inalambrico", 2, 35.50)
+
+                RENDER TEMPLATE lcTmpl WITH items_factura TO FILE '{out_file}'
+                """
+            )
+            self.assertTrue(out_file.is_file())
+            content = out_file.read_text(encoding="utf-8")
+            self.assertIn("Factura FACT-2026-001", content)
+            self.assertIn("CLIENTE PREFERENCIAL", content)
+            self.assertIn("LAPTOP GAMER", content)
+            self.assertIn("$1,450.00", content)
+            self.assertIn("MOUSE INALAMBRICO", content)
+
+    def test_rate_limiter_and_throttle(self) -> None:
+        self.interp.execute(
+            """
+            llP1 = RATELIMIT_CHECK("cliente_ip_1", 2, 60)
+            llP2 = RATELIMIT_CHECK("cliente_ip_1", 2, 60)
+            llP3 = RATELIMIT_CHECK("cliente_ip_1", 2, 60)
+            =RATELIMIT_RESET("cliente_ip_1")
+            llP4 = RATELIMIT_CHECK("cliente_ip_1", 2, 60)
+            """
+        )
+        self.assertTrue(self.interp.eval_expr("llP1"))
+        self.assertTrue(self.interp.eval_expr("llP2"))
+        self.assertFalse(self.interp.eval_expr("llP3"))
+        self.assertTrue(self.interp.eval_expr("llP4"))
+
+        # Probar comando THROTTLE
+        self.interp.execute('THROTTLE "endpoint_login" LIMIT 2 PER 10')
+        self.interp.execute('THROTTLE "endpoint_login" LIMIT 2 PER 10')
+        with self.assertRaises(RuntimeError):
+            self.interp.execute('THROTTLE "endpoint_login" LIMIT 2 PER 10 ERROR "Demasiadas peticiones"')
+
+    def test_cursor_diff_and_reconciliation(self) -> None:
+        self.interp.execute(
+            """
+            CREATE CURSOR c_ayer (id I, producto C(20), stock I, precio N(10,2))
+            INSERT INTO c_ayer VALUES (1, "Teclado Mecanico", 10, 50.00)
+            INSERT INTO c_ayer VALUES (2, "Monitor IPS", 5, 200.00)
+            INSERT INTO c_ayer VALUES (3, "Webcam HD", 15, 45.00)
+
+            CREATE CURSOR c_hoy (id I, producto C(20), stock I, precio N(10,2))
+            INSERT INTO c_hoy VALUES (1, "Teclado Mecanico", 8, 55.00)
+            INSERT INTO c_hoy VALUES (2, "Monitor IPS", 5, 200.00)
+            INSERT INTO c_hoy VALUES (4, "Microfono USB", 20, 80.00)
+
+            DIFF CURSOR c_ayer WITH c_hoy KEY id INTO CURSOR reconciliacion
+            lnDiffCount = RECCOUNT("reconciliacion")
+            """
+        )
+        self.assertEqual(self.interp.eval_expr("lnDiffCount"), 4)
+        # Verificar estados
+        cur = self.interp.wam.get_cursor("reconciliacion")
+        self.assertIsNotNone(cur)
+        statuses = {r["key_val"]: (r["status"], r["changed"]) for r in cur.records}
+        self.assertEqual(statuses["1"][0], "MODIFIED")
+        self.assertIn("stock", statuses["1"][1])
+        self.assertIn("precio", statuses["1"][1])
+        self.assertEqual(statuses["2"][0], "IDENTICAL")
+        self.assertEqual(statuses["3"][0], "DELETED")
+        self.assertEqual(statuses["4"][0], "ADDED")
+
+
 if __name__ == "__main__":
     unittest.main()
 
